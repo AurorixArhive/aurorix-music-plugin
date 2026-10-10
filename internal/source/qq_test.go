@@ -2,9 +2,9 @@ package source
 
 import (
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"strings"
 	"testing"
 
@@ -15,40 +15,36 @@ import (
 
 func testClient() *requests.Client { return requests.Init(10) }
 
-// fakeQQ 把 qqAPIBase 指到本地假服务器, 由 handler 决定回什么。
-func fakeQQ(t *testing.T, handler func(query url.Values) string) *httptest.Server {
+// fakeQQ 把两条接口地址都指到本地假服务器: POST 是 musicu.fcg, GET 是详情接口。
+// handler 拿到请求(含头)与正文/查询串, 决定回什么。
+func fakeQQ(t *testing.T, handler func(r *http.Request, body string) (int, string)) *httptest.Server {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		body := string(raw)
+		if r.Method == http.MethodGet {
+			body = r.URL.RawQuery
+		}
+		status, payload := handler(r, body)
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(handler(r.URL.Query())))
+		w.WriteHeader(status)
+		_, _ = w.Write([]byte(payload))
 	}))
-	old := qqAPIBase
-	qqAPIBase = srv.URL
+	oldMusic, oldDetail := qqMusicAPI, qqDetailAPI
+	qqMusicAPI, qqDetailAPI = srv.URL, srv.URL
 	t.Cleanup(func() {
-		qqAPIBase = old
+		qqMusicAPI, qqDetailAPI = oldMusic, oldDetail
 		srv.Close()
 	})
 	return srv
 }
 
-func TestQQKeyOverride(t *testing.T) {
-	if got := NewQQ(nil, nil).key(); got != qqDefaultAPIKey {
-		t.Fatalf("无配置时应回落到内置密钥, got %q", got)
-	}
-	if got := NewQQ(nil, func() string { return " sk-custom " }).key(); got != "sk-custom" {
-		t.Fatalf("key = %q", got)
-	}
-	if got := NewQQ(nil, func() string { return "   " }).key(); got != qqDefaultAPIKey {
-		t.Fatalf("空配置时应回落到内置密钥, got %q", got)
-	}
-}
-
-func TestParseQQSearch(t *testing.T) {
-	body := []byte(`{"code":0,"data":[` +
-		`{"mid":"003cI52o4daJJL","id":449198,"name":"花海","interval":264,"singer":[{"name":"周杰伦"}],"album":{"mid":"002Neh8l0uciQZ"}},` +
-		`{"mid":"","name":"没有 mid"},` +
-		`{"mid":"x","name":""}` +
-		`]}`)
+func TestParseQQSearchStripsEmAndJoinsSingers(t *testing.T) {
+	body := []byte(`{"search":{"data":{"body":{"item_song":[` +
+		`{"mid":"003cI52o4daJJL","title":"<em>花海</em>","interval":264,"singer":[{"name":"周杰伦"}]},` +
+		`{"mid":"","title":"没有 mid"},` +
+		`{"mid":"x","title":""}` +
+		`]}}}}`)
 
 	songs, err := parseQQSearch(body)
 	if err != nil {
@@ -57,140 +53,124 @@ func TestParseQQSearch(t *testing.T) {
 	if len(songs) != 1 {
 		t.Fatalf("songs = %+v", songs)
 	}
-	// interval 要落进 Duration: 卡片的时长过滤全靠它。
+	// 标题里的 <em> 高亮标签必须剥掉; interval 要落进 Duration(卡片时长过滤靠它)。
 	want := song.Song{Source: song.QQ, ID: "003cI52o4daJJL", Title: "花海", Artist: "周杰伦", Duration: 264}
 	if songs[0] != want {
 		t.Fatalf("songs[0] = %+v, want %+v", songs[0], want)
 	}
 }
-func TestParseQQSearchFallsBackToTitleField(t *testing.T) {
-	body := []byte(`{"code":0,"data":[{"mid":"m","title":"备用标题","singer":[{"title":"备用歌手"}]}]}`)
+
+func TestParseQQSearchFallsBackToSongList(t *testing.T) {
+	body := []byte(`{"search":{"data":{"body":{"song":{"list":[{"mid":"m","title":"备用","singer":[{"name":"A"},{"name":"B"}]}]}}}}}`)
 
 	songs, err := parseQQSearch(body)
 	if err != nil || len(songs) != 1 {
 		t.Fatalf("songs = %+v, err = %v", songs, err)
 	}
-	if songs[0].Title != "备用标题" || songs[0].Artist != "备用歌手" {
+	if songs[0].Title != "备用" || songs[0].Artist != "A、B" {
 		t.Fatalf("songs[0] = %+v", songs[0])
 	}
 }
 
-func TestParseQQSearchJoinsSingers(t *testing.T) {
-	body := []byte(`{"code":0,"data":[{"mid":"m","name":"合唱","singer":[{"name":"A"},{"name":"B"}]}]}`)
+func TestParseQQSearchFallsBackToNameField(t *testing.T) {
+	body := []byte(`{"search":{"data":{"body":{"item_song":[{"mid":"m","name":"只有 name"}]}}}}`)
 
 	songs, err := parseQQSearch(body)
 	if err != nil || len(songs) != 1 {
 		t.Fatalf("songs = %+v, err = %v", songs, err)
 	}
-	if songs[0].Artist != "A、B" {
-		t.Fatalf("Artist = %q", songs[0].Artist)
+	if songs[0].Title != "只有 name" {
+		t.Fatalf("Title = %q", songs[0].Title)
 	}
 }
 
-func TestParseQQSearchEmpty(t *testing.T) {
-	songs, err := parseQQSearch([]byte(`{"code":0,"data":[]}`))
-	if err != nil || len(songs) != 0 {
+func TestParseQQSearchEmptyAndGarbage(t *testing.T) {
+	if songs, err := parseQQSearch([]byte(`{"search":{"data":{"body":{}}}}`)); err != nil || len(songs) != 0 {
 		t.Fatalf("songs = %+v, err = %v", songs, err)
 	}
-}
-
-func TestParseQQSearchReportsKeyError(t *testing.T) {
-	_, err := parseQQSearch([]byte(`{"code":0,"msg":"密钥错误","errcode":11002}`))
-	if err == nil || !strings.Contains(err.Error(), "密钥错误") {
-		t.Fatalf("err = %v; 上游把出错也写成 code=0, 必须靠 errcode 认出来", err)
-	}
-}
-
-func TestParseQQSearchRejectsGarbage(t *testing.T) {
 	if _, err := parseQQSearch([]byte(`not json`)); err == nil {
 		t.Fatal("非 JSON 应报错")
 	}
-	if _, err := parseQQSearch([]byte(`<html>502</html>`)); err == nil {
-		t.Fatal("网关错误页应报错")
+}
+
+func TestQQSearchSendsQueryAndOptionalCookie(t *testing.T) {
+	var seen *http.Request
+	var body string
+	fakeQQ(t, func(r *http.Request, b string) (int, string) {
+		seen, body = r, b
+		return 200, `{"search":{"data":{"body":{"item_song":[{"mid":"m","title":"t"}]}}}}`
+	})
+
+	if _, err := NewQQ(testClient(), func() string { return "qqmusic_key=abc" }).Search("花海", 5); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(body, `"query":"花海"`) || !strings.Contains(body, "SearchCgiService") {
+		t.Fatalf("搜索请求体不对: %s", body)
+	}
+	if got := seen.Header.Get("Cookie"); got != "qqmusic_key=abc" {
+		t.Fatalf("配了 Cookie 就该带上, got %q", got)
 	}
 }
 
-func TestParseQQAudio(t *testing.T) {
-	body := []byte(`{"code":0,"data":{"m1":"https://isure.stream.qqmusic.qq.com/x.mp3?vkey=1"},"diag":{"m1":{"needBuy":1}}}`)
+func TestQQWithoutCookieSendsNoCookieHeader(t *testing.T) {
+	var cookie string
+	fakeQQ(t, func(r *http.Request, _ string) (int, string) {
+		cookie = r.Header.Get("Cookie")
+		return 200, `{"search":{"data":{"body":{"item_song":[]}}}}`
+	})
 
-	link, err := parseQQAudio(body, "m1")
+	if _, err := NewQQ(testClient(), nil).Search("花海", 5); err != nil {
+		t.Fatal(err)
+	}
+	if cookie != "" {
+		t.Fatalf("没配 Cookie 就不该发, got %q", cookie)
+	}
+}
+
+func TestQQAudioPicksFirstNonEmptyPurl(t *testing.T) {
+	var vkeyBody string
+	fakeQQ(t, func(r *http.Request, body string) (int, string) {
+		if r.Method == http.MethodGet {
+			return 200, `{"data":[{"file":{"media_mid":"002JkHfm3Mws2i"}}]}`
+		}
+		vkeyBody = body
+		return 200, `{"req_0":{"code":0,"data":{"midurlinfo":[{"purl":""},{"purl":"M500002JkHfm3Mws2i.mp3?vkey=1"}]}}}`
+	})
+
+	link, err := NewQQ(testClient(), nil).Audio(song.Song{Source: song.QQ, ID: "003hKob536i6FA"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(link, "https://") {
+	if link != qqStreamBase+"M500002JkHfm3Mws2i.mp3?vkey=1" {
 		t.Fatalf("link = %q", link)
 	}
-}
-
-func TestParseQQAudioNeedBuyReturnsNoResult(t *testing.T) {
-	body := []byte(`{"code":0,"data":{"m1":""},"diag":{"m1":{"result":22,"needBuy":1}}}`)
-
-	if _, err := parseQQAudio(body, "m1"); !errors.Is(err, ErrNoResult) {
-		t.Fatalf("err = %v; 期望 ErrNoResult", err)
-	}
-}
-
-func TestParseQQAudioMissingKeyReturnsNoResult(t *testing.T) {
-	body := []byte(`{"code":0,"data":{"other":"https://x/y.mp3"}}`)
-
-	if _, err := parseQQAudio(body, "m1"); !errors.Is(err, ErrNoResult) {
-		t.Fatalf("err = %v; 期望 ErrNoResult", err)
-	}
-}
-
-func TestQQQualityLadder(t *testing.T) {
-	if len(qqQualities) < 2 || qqQualities[0] != "MP3_320" {
-		t.Fatalf("应从 320k 起按序降级, got %v", qqQualities)
-	}
-	if last := qqQualities[len(qqQualities)-1]; last != "MP3_128" {
-		t.Fatalf("兜底应是 128k, got %q", last)
-	}
-}
-
-// 上游是"多账号池"式的实现, 同一个 mid 同一个音质单次成功率只有五成 ——
-// 所以同一个音质必须试几次再降级, 否则点十次有五次白点。
-func TestQQAudioRetriesSameQualityBeforeDegrading(t *testing.T) {
-	var got []string
-	srv := fakeQQ(t, func(query url.Values) string {
-		got = append(got, query.Get("type"))
-		// 前两次(假装)抽风, 第三次才给直链。
-		if len(got) < 3 {
-			return `{"code":0,"data":{"002hG4kq0WZBma":""},"diag":{"002hG4kq0WZBma":{"result":22,"needBuy":1}}}`
-		}
-		return `{"code":0,"data":{"002hG4kq0WZBma":"https://isure.stream.qqmusic.qq.com/x.mp3?vkey=1"}}`
-	})
-	defer srv.Close()
-
-	link, err := NewQQ(testClient(), nil).Audio(song.Song{Source: song.QQ, ID: "002hG4kq0WZBma"})
-	if err != nil {
-		t.Fatalf("err = %v", err)
-	}
-	if !strings.HasPrefix(link, "https://") {
-		t.Fatalf("link = %q", link)
-	}
-	if len(got) != 3 {
-		t.Fatalf("请求了 %d 次 (%v), 期望 3 次", len(got), got)
-	}
-	for _, quality := range got {
-		if quality != "MP3_320" {
-			t.Fatalf("还没试够次数就降级了: %v", got)
+	// 文件名必须用 media_mid 拼(用 songmid 会 404), 且音质从高到低都排上。
+	for _, want := range []string{"M800002JkHfm3Mws2i.mp3", "M500002JkHfm3Mws2i.mp3", "C400002JkHfm3Mws2i.m4a"} {
+		if !strings.Contains(vkeyBody, want) {
+			t.Fatalf("取链请求里缺 %s: %s", want, vkeyBody)
 		}
 	}
 }
 
-func TestQQAudioGivesUpAfterAllAttempts(t *testing.T) {
-	var count int
-	srv := fakeQQ(t, func(url.Values) string {
-		count++
-		return `{"code":0,"data":{"002hG4kq0WZBma":""},"diag":{"002hG4kq0WZBma":{"result":22}}}`
+func TestQQAudioNoPurlReturnsNoResult(t *testing.T) {
+	fakeQQ(t, func(r *http.Request, _ string) (int, string) {
+		if r.Method == http.MethodGet {
+			return 200, `{"data":[{"file":{"media_mid":"mm"}}]}`
+		}
+		return 200, `{"req_0":{"code":0,"data":{"midurlinfo":[{"purl":""}]}}}`
 	})
-	defer srv.Close()
 
-	_, err := NewQQ(testClient(), nil).Audio(song.Song{Source: song.QQ, ID: "002hG4kq0WZBma"})
-	if !errors.Is(err, ErrNoResult) {
+	if _, err := NewQQ(testClient(), nil).Audio(song.Song{Source: song.QQ, ID: "m"}); !errors.Is(err, ErrNoResult) {
 		t.Fatalf("err = %v; 期望 ErrNoResult", err)
 	}
-	if count != qqAttempts*len(qqQualities) {
-		t.Fatalf("总请求数 = %d, 期望 %d(音质数 × 每音质次数)", count, qqAttempts*len(qqQualities))
+}
+
+func TestQQAudioMissingMediaMidReturnsNoResult(t *testing.T) {
+	fakeQQ(t, func(r *http.Request, _ string) (int, string) {
+		return 200, `{"data":[]}`
+	})
+
+	if _, err := NewQQ(testClient(), nil).Audio(song.Song{Source: song.QQ, ID: "m"}); !errors.Is(err, ErrNoResult) {
+		t.Fatalf("err = %v; 期望 ErrNoResult", err)
 	}
 }

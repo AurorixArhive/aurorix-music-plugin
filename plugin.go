@@ -12,28 +12,30 @@ import (
 
 const PluginID = "music"
 
-type apiKey struct {
+// 管理台填的 QQ 音乐 Cookie: 用来解锁付费曲与更高音质, 没填也能放免费曲。
+// 做成按需读取而不是快照 —— 登录态刷新后重填一次即生效。
+type qqCookie struct {
 	value atomic.Pointer[string]
 }
 
-func (a *apiKey) Get() string {
-	if v := a.value.Load(); v != nil {
+func (c *qqCookie) Get() string {
+	if v := c.value.Load(); v != nil {
 		return *v
 	}
 	return ""
 }
 
-func (a *apiKey) Apply(values map[string]any) error {
-	key, _ := values["qq_apikey"].(string)
-	a.value.Store(&key)
+func (c *qqCookie) Apply(values map[string]any) error {
+	cookie, _ := values["qqmusic_cookie"].(string)
+	c.value.Store(&cookie)
 	return nil
 }
 
 func init() {
 	http := requests.Init(15)
-	key := &apiKey{}
+	cookie := &qqCookie{}
 	feature := play.New(source.Chain{
-		source.NewQQ(http, key.Get),
+		source.NewQQ(http, cookie.Get),
 		source.NewKuwo(http),
 		source.NewNetease(http),
 	})
@@ -45,12 +47,12 @@ func init() {
 		Commands:    []*plugin.Command{feature.Command()},
 		TemplateFS:  templateFS,
 		Config: []plugin.ConfigField{{
-			Key:         "qq_apikey",
-			Label:       "QQ 音源密钥",
-			Description: "留空使用内置默认密钥，密钥失效时可在管理台换成自己的",
-			Type:        "text",
-			Placeholder: "sk-...",
+			Key:         "qqmusic_cookie",
+			Label:       "QQ 音乐 Cookie",
+			Description: "可选。留空只能搜到并播放免费曲目；想要付费曲与 320k 音质，登录 y.qq.com 后把完整 Cookie 填这里（含 uin / qqmusic_key / qm_keyst 等）",
+			Type:        "password",
+			Placeholder: "uin=...; qqmusic_key=...; qm_keyst=...",
 		}},
-		ApplyConfig: key.Apply,
+		ApplyConfig: cookie.Apply,
 	})
 }
