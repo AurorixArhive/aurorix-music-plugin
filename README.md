@@ -54,7 +54,7 @@ aurx run
 
 | 音源 | `-s` | 说明 |
 |---|---|---|
-| QQ 音乐 | `qq` | 走第三方接口，要密钥；限速最紧，密钥失效可在管理台换成自己的 |
+| QQ 音乐 | `qq` | 官方接口，不需要密钥；免费曲直接能放，配上 Cookie 可解锁付费曲与 320k 音质 |
 | 酷我 | `kw` | 移动端公开接口 |
 | 网易云 | `wyy` | 公开接口，兜底的一环 |
 
@@ -66,7 +66,7 @@ aurx run
 
 | 配置项 | 默认 | 作用 |
 |---|---|---|
-| QQ 音源密钥 | 内置默认 | 留空用内置密钥；密钥失效、或想用自己的配额时填 `sk-...` |
+| QQ 音乐 Cookie | 空 | 可选。不填也能搜、能放免费曲；想放付费曲或用 320k 音质，登录 [y.qq.com](https://y.qq.com/) 后把完整 Cookie（含 `uin` / `qqmusic_key` / `qm_keyst`）填这里 |
 
 ## 结构
 
@@ -102,7 +102,7 @@ go test ./internal/source/ -run Live -v         # 真实网络用例, 需联网
 本插件是标准 Go module，发新版靠 git tag。使用方一行升级：
 
 ```bash
-aurx update github.com/AurorixArhive/aurorix-music-plugin
+aurx update aurorix-music-plugin    # 模块名可以只写一段
 ```
 
 `aurx update` = `go get -u` + `go mod tidy` + 编译校验；跑完 `aurx run` 重启实例即可。
