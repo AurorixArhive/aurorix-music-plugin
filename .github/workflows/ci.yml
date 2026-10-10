@@ -1,0 +1,62 @@
+name: ci
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      # go.mod 用相对路径引用 ../Aurorix, 两个模块并排检出后组装成工作区。
+      - name: 检出插件
+        uses: actions/checkout@v4
+        with:
+          path: music-plugin
+
+      - name: 检出框架
+        uses: actions/checkout@v4
+        with:
+          repository: KasumiYuku/Aurorix
+          path: Aurorix
+          token: ${{ secrets.AURORIX_TOKEN || github.token }}
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: music-plugin/go.mod
+          cache: true
+          cache-dependency-path: |
+            music-plugin/go.sum
+            Aurorix/go.sum
+
+      - name: 组装工作区
+        run: go work init ./music-plugin ./Aurorix
+
+      - name: 格式
+        working-directory: music-plugin
+        run: |
+          out="$(gofmt -l .)"
+          if [ -n "$out" ]; then printf '未格式化的文件:\n%s\n' "$out"; exit 1; fi
+
+      - name: 静态检查
+        working-directory: music-plugin
+        run: go vet ./...
+
+      - name: 构建
+        working-directory: music-plugin
+        run: go build ./...
+
+      # -short 跳过打真实网络的用例(见 internal/source/live_test.go)。
+      - name: 竞态测试
+        working-directory: music-plugin
+        run: go test -race -count=1 -short ./...
