@@ -27,12 +27,13 @@ const (
 // 十个人同时点同一首歌, 只向上游取一次直链, 其余的人共享这次结果。
 var audioFlight = guard.NewFlight()
 
+// Play 通过 Pool 取音源: 优先级改了就跟着变, 不重建实例。
 type Play struct {
-	chain source.Chain
+	sources *source.Pool
 }
 
-func New(chain source.Chain) *Play {
-	return &Play{chain: chain}
+func New(sources *source.Pool) *Play {
+	return &Play{sources: sources}
 }
 
 // playArgs 是这条指令的参数契约, 交给框架的 kong 解析, 结果塞进 ctx.Parsed。
@@ -87,7 +88,7 @@ func refFailure(err error) error {
 
 // search 搜歌。only 非空时只在那一家的音源里找, 空则走默认的降级链。
 func (p *Play) search(ctx *botcontext.MessageContext, keyword string, only song.Source) error {
-	found, err := p.chain.SearchOn(only, keyword, maxResults)
+	found, err := p.sources.SearchOn(only, keyword, maxResults)
 	if err != nil {
 		return err
 	}
@@ -110,7 +111,7 @@ func (p *Play) renderCard(ctx *botcontext.MessageContext, keyword string, songs 
 
 func (p *Play) deliver(ctx *botcontext.MessageContext, pick song.Song) error {
 	link, err := audioFlight.Do(pick.Ref(), func() (string, error) {
-		return p.chain.Audio(pick)
+		return p.sources.Audio(pick)
 	})
 	if err != nil {
 		return err
