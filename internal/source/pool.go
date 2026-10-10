@@ -36,12 +36,13 @@ func (p *Pool) SearchOn(only song.Source, keyword string, limit int) ([]song.Son
 	return p.chain().SearchOn(only, keyword, limit)
 }
 
-func (p *Pool) Audio(pick song.Song) (string, error) {
-	return p.chain().Audio(pick)
+// Detail 按卡片上的 (音源, ID) 换一条当前可用的直链。
+func (p *Pool) Detail(pick song.Song) (song.Song, error) {
+	return p.chain().Detail(pick)
 }
 
 // SetOrder 按给定名字重排优先级: 先按 names 的顺序排, 没提到的音源按原相对顺序接在后面。
-// 名字可写短名(qq / kw / wyy)或全名(kuwo / netease)。
+// 名字认 song 包那份短名表(见 song.ByName), 这样 -s 和这里认的是同一套名字。
 func (p *Pool) SetOrder(names []string) error {
 	head := make([]Source, 0, len(names))
 	placed := make(map[song.Source]bool, len(names))
@@ -50,9 +51,9 @@ func (p *Pool) SetOrder(names []string) error {
 		if name == "" {
 			continue
 		}
-		src, ok := sourceByName(name)
+		src, ok := song.ByName(name)
 		if !ok {
-			return fmt.Errorf("不认识的音源 %q(可用: kw 酷我 / wyy 网易云 / qq QQ 音乐)", name)
+			return fmt.Errorf("不认识的音源 %q(可用: %s)", name, strings.Join(song.Names(), " / "))
 		}
 		registered, ok := p.byName[src]
 		if !ok || placed[src] {
@@ -78,16 +79,4 @@ func (p *Pool) chain() Chain {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	return append(Chain(nil), p.order...)
-}
-
-func sourceByName(name string) (song.Source, bool) {
-	switch strings.ToLower(name) {
-	case "qq", "qqmusic":
-		return song.QQ, true
-	case "kw", "kuwo":
-		return song.Kuwo, true
-	case "wyy", "netease", "wangyi":
-		return song.Netease, true
-	}
-	return "", false
 }

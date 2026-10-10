@@ -1,34 +1,38 @@
 package song
 
-import (
-	"strconv"
-	"strings"
-)
+import "strconv"
 
 // 卡片上那行可点命令的全部内容。它必须自包含 —— 服务端不留任何状态,
 // 所以卡片发出去多久、机器人重启多少次, 点下去都还能找到同一首歌。
 //
-// 打包方式: 6 bit 一字符的自定义字母表(64 个字符, 不含 +/=/&/% 这些在 mqqapi
-// 链接里要转义、或在输入框里看着别扭的字符)。
+// 打包方式是 6 bit 一字符的自定义字母表(64 个字符, 不含 +/=/&/% 这些在 mqqapi
+// 链接里要转义、或在输入框里看着别扭的字符):
 //
-//	QQ       mid 本来就是 62 进制 14 位, 一位塞 6 bit -> 84 bit, 加 2 bit 校验 = 15 字符
-//	酷我/网易 十进制 id 塞 34 bit,                        加 4 bit 校验 =  7 字符
+//	version 2 | mode 1 | source 4 | 载荷 | check 4
+//
+// 载荷两选一, 由 mode 那一位区分:
+//
+//	mode 0  纯数字 ID 直接塞 36 位 —— 网易/一听/百度的 ID 都是数字, 编出 8 字符
+//	mode 1  带字母的 ID(qq 的 14 位 mid)按每字符 6 位塞, 前面加 5 位长度, 编出 17 字符
 //
 // 刻意不用大数运算: 62^14 装不进 uint64, 硬上 math/big 会慢一个量级。
-// 实测编解码都是几百纳秒、零分配。
 const refAlphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
 
-// QQ 的 mid 用的 62 进制数字表
+// refDigits 是 ID 用的 62 进制数字表, 顺序与 qq 的 mid 一致(id 是 62 进制, 不是自己的随机串)。
 const refDigits = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
 
 const (
-	refVersion  = 1
-	refQQLen    = 15
-	refNumLen   = 7
-	refQQDigits = 14
-	refNumBits  = 34
-	refQQCheck  = 2
-	refNumCheck = 4
+	refVersion   = 2
+	refNumBits   = 36
+	refLenBits   = 5
+	refMaxChars  = 31
+	refCheckBits = 4
+
+	// 短码长度落在 [8, 34]: 8 是纯数字那一档, 34 是 31 字符 ID 那一档。
+	// 这是个粗筛 —— 关键词绝大多数连这一关都过不了, 过了的交给音源编号和校验位。
+	// 音源编号只有 4 位、目前只用了 0-3, 所以"长得像短码"和"真是短码"之间隔得很远。
+	refMinLen = 8
+	refMaxLen = 34
 )
 
 var (
@@ -53,7 +57,7 @@ type refWriter struct {
 	acc uint64
 	n   uint
 	crc uint8
-	buf [refQQLen]byte
+	buf [refMaxLen]byte
 	len int
 }
 
@@ -70,8 +74,8 @@ func (w *refWriter) put(v uint64, bits uint) {
 
 // finish 追一个校验位段再收尾。校验只防手滑和"关键词恰好长得像短码",
 // 不是安全机制 —— 短码本来就不需要保密。
-func (w *refWriter) finish(checkBits uint) string {
-	w.put(uint64(w.crc)&(1<<checkBits-1), checkBits)
+func (w *refWriter) finish() string {
+	w.put(uint64(w.crc)&(1<<refCheckBits-1), refCheckBits)
 	if w.n > 0 {
 		w.buf[w.len] = refAlphabet[(w.acc<<(6-w.n))&0x3f]
 		w.len++
@@ -87,6 +91,7 @@ type refReader struct {
 	crc uint8
 }
 
+// get 一次取 bits 位。越过末尾的部分按 0 补 —— 写入端也是这么补的, 所以不用先知道总长。
 func (r *refReader) get(bits uint) uint64 {
 	for r.n < bits {
 		var group uint64
@@ -108,22 +113,7 @@ func (r *refReader) get(bits uint) uint64 {
 	return v
 }
 
-// QQ 的 mid 实测一律是 "00" 开头的 62 进制 14 位(20 多首样本全是)。
-// 卡住这一条不是为了正确性, 而是为了"关键词不会恰好长得像短码" ——
-// 形状不符就退回老格式, 解码端不认就直接当关键词搜, 两边都不会误判。
-func qqMidShape(id string) bool {
-	if len(id) != refQQDigits || id[0] != '0' || id[1] != '0' {
-		return false
-	}
-	for i := 0; i < refQQDigits; i++ {
-		if refDigitIndex[id[i]] < 0 {
-			return false
-		}
-	}
-	return true
-}
-
-// encodeRef 把 (音源, 曲目 ID) 编成短码; ID 形状不对就返回 false, 由调用方退回老格式。
+// encodeRef 把 (音源, 曲目 ID) 编成短码; 编不出来就返回 false, 由调用方退回明文形式。
 func encodeRef(src Source, id string) (string, bool) {
 	index, ok := src.index()
 	if !ok {
@@ -132,33 +122,33 @@ func encodeRef(src Source, id string) (string, bool) {
 
 	var w refWriter
 	w.put(refVersion, 2)
-	w.put(uint64(index), 2)
-
-	if src == QQ {
-		if !qqMidShape(id) {
-			return "", false
-		}
-		for i := 0; i < refQQDigits; i++ {
-			digit := refDigitIndex[id[i]]
-			if digit < 0 {
-				return "", false
-			}
-			w.put(uint64(digit), 6)
-		}
-		return w.finish(refQQCheck), true
+	if value, err := strconv.ParseUint(id, 10, 64); err == nil && value > 0 && value < 1<<refNumBits {
+		w.put(0, 1)
+		w.put(uint64(index), 4)
+		w.put(value, refNumBits)
+		return w.finish(), true
 	}
 
-	value, err := strconv.ParseUint(id, 10, 64)
-	if err != nil || value == 0 || value >= 1<<refNumBits {
+	if len(id) == 0 || len(id) > refMaxChars {
 		return "", false
 	}
-	w.put(value, refNumBits)
-	return w.finish(refNumCheck), true
+	for i := 0; i < len(id); i++ {
+		if refDigitIndex[id[i]] < 0 {
+			return "", false
+		}
+	}
+	w.put(1, 1)
+	w.put(uint64(index), 4)
+	w.put(uint64(len(id)), refLenBits)
+	for i := 0; i < len(id); i++ {
+		w.put(uint64(refDigitIndex[id[i]]), 6)
+	}
+	return w.finish(), true
 }
 
 func decodeRef(code string) (Source, string, bool) {
 	// 长度先卡死: 关键词绝大多数连这一关都过不了
-	if len(code) != refQQLen && len(code) != refNumLen {
+	if len(code) < refMinLen || len(code) > refMaxLen {
 		return "", "", false
 	}
 
@@ -166,89 +156,55 @@ func decodeRef(code string) (Source, string, bool) {
 	if r.get(2) != refVersion {
 		return "", "", false
 	}
-	src, ok := sourceAt(r.get(2))
+	mode := r.get(1)
+	src, ok := sourceAt(r.get(4))
 	if !ok {
 		return "", "", false
 	}
 
-	if src == QQ {
-		if len(code) != refQQLen {
+	var id string
+	if mode == 1 {
+		length := r.get(refLenBits)
+		if length == 0 || length > refMaxChars {
 			return "", "", false
 		}
-		var id [refQQDigits]byte
-		for i := range id {
+		digits := make([]byte, length)
+		for i := range digits {
 			digit := r.get(6)
 			if digit >= uint64(len(refDigits)) {
 				return "", "", false
 			}
-			id[i] = refDigits[digit]
+			digits[i] = refDigits[digit]
 		}
-		want := r.crc & (1<<refQQCheck - 1)
-		if uint8(r.get(refQQCheck)) != want {
+		id = string(digits)
+	} else {
+		value := r.get(refNumBits)
+		if value == 0 {
 			return "", "", false
 		}
-		if !qqMidShape(string(id[:])) {
-			return "", "", false
-		}
-		return src, string(id[:]), true
+		id = strconv.FormatUint(value, 10)
 	}
 
-	if len(code) != refNumLen {
+	// 校验位要先取出来再读: get 自己会更新 crc, 写在同一个表达式里两个操作数谁先算就说不准了。
+	want := r.crc & (1<<refCheckBits - 1)
+	if uint8(r.get(refCheckBits)) != want {
 		return "", "", false
 	}
-	value := r.get(refNumBits)
-	want := r.crc & (1<<refNumCheck - 1)
-	if uint8(r.get(refNumCheck)) != want || value == 0 {
-		return "", "", false
-	}
-	return src, strconv.FormatUint(value, 10), true
+	return src, id, true
 }
 
 func (s Source) index() (int, bool) {
-	switch s {
-	case QQ:
-		return 0, true
-	case Kuwo:
-		return 1, true
-	case Netease:
-		return 2, true
+	for i, src := range all {
+		if src == s {
+			return i, true
+		}
 	}
 	return 0, false
 }
 
 func sourceAt(index uint64) (Source, bool) {
-	switch index {
-	case 0:
-		return QQ, true
-	case 1:
-		return Kuwo, true
-	case 2:
-		return Netease, true
+	if index >= uint64(len(all)) {
+		return "", false
 	}
-	return "", false
-}
-
-func (s Source) refCode() string {
-	switch s {
-	case QQ:
-		return "q"
-	case Kuwo:
-		return "k"
-	case Netease:
-		return "n"
-	}
-	return ""
-}
-
-// legacySource 认老卡片上的音源前缀。
-func legacySource(name string) (Source, bool) {
-	switch strings.ToLower(strings.TrimSpace(name)) {
-	case "q", "qq":
-		return QQ, true
-	case "k", "kuwo":
-		return Kuwo, true
-	case "n", "netease":
-		return Netease, true
-	}
-	return "", false
+	return all[index], true
 }

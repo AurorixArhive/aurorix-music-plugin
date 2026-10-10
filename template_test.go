@@ -27,7 +27,7 @@ func TestSearchTemplateRendersQuotedInlineLinks(t *testing.T) {
 
 	for _, want := range []string{
 		"# 🎵 花海",
-		"共 2 首 · 点蓝色歌名直接发送语音",
+		"共 2 首 · 点蓝色歌名直接发送",
 		"> [花海](mqqapi://aio/inlinecmd?command=%2Fplay+QAAMywUJgQ0q229",
 		" · 周杰伦",
 		" · 中孝介",

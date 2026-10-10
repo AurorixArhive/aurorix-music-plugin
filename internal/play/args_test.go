@@ -15,7 +15,7 @@ import (
 var registerOnce sync.Once
 
 func commandForTest() *plugin.Command {
-	cmd := New(nil).Command()
+	cmd := New(nil, nil).Command()
 	registerOnce.Do(func() {
 		plugin.Register(&plugin.Plugin{Id: "play-args-probe", Commands: []*plugin.Command{cmd}})
 	})
@@ -39,12 +39,13 @@ func TestArgsFromRawMessage(t *testing.T) {
 		{"/点播 周杰伦 花海", "", []string{"周杰伦", "花海"}},
 		{"点歌 花海", "", []string{"花海"}}, // 不带前缀符号
 		{"/点歌 -s wyy 花海", "wyy", []string{"花海"}},
-		{"/点歌 花海 -s kw", "kw", []string{"花海"}}, // 参数写在歌名后面
-		{"/play 花海 --source=qq", "qq", []string{"花海"}},
+		{"/点歌 花海 -s 1ting", "1ting", []string{"花海"}}, // 参数写在歌名后面
+		{"/play 花海 --source=baidu", "baidu", []string{"花海"}},
 		{"/点歌 -s wyy", "wyy", nil},             // 只有音源没有歌名 -> 上层回帮助
 		{"/点歌", "", nil},                       // 裸指令 -> 上层回帮助
 		{"/点歌 花海 -s 网易", "网易", []string{"花海"}}, // 认不出的音源由插件自己报错
-		// 短码字母表里有 "-", 含它的短码同样不能被当成参数。
+		// 带 "-" 的曲名不能被当成参数, 短码字母表里也有 "-"。
+		{"/点歌 Lyrith -迷宮リリス-", "", []string{"Lyrith", "-迷宮リリス-"}},
 		{"/点歌 -s wyy UAAAA-K", "wyy", []string{"UAAAA-K"}},
 	}
 	for _, c := range cases {
@@ -60,29 +61,35 @@ func TestArgsFromRawMessage(t *testing.T) {
 	}
 }
 
-// 卡片上那行命令得一路走到能播的那首歌: 短码里带 "-" 也不能被当成参数。
+// 卡片上那行命令得一路走到能播的那首歌: 短码里的字符一个都不能被参数解析吃掉。
 func TestCardRefSurvivesCommandParsing(t *testing.T) {
 	cmd := commandForTest()
 
-	// 248 这两首的短码里正好带 "-", 是字母表里最容易出事的那一档。
-	if ref := (song.Song{Source: song.Kuwo, ID: "248"}).Ref(); !strings.Contains(ref, "-") {
-		t.Fatalf("样本变了: 酷我 248 的短码 %q 里本该有 \"-\"", ref)
+	picks := []song.Song{
+		{Source: song.QQ, ID: "002hG4kq0WZBma"},
+		{Source: song.Wyy, ID: "1901371647"},
+		{Source: song.Baidu, ID: "T10049755016"},
+		{Source: song.Ting1, ID: "1219544"},
+	}
+	// 字母表里带 "-": 随便编一批数字 ID, 挑出真的带横杠的那些一起验。
+	for i := 1; i < 400 && len(picks) < 8; i++ {
+		ref := (song.Song{Source: song.Wyy, ID: itoa(i)}).Ref()
+		if strings.Contains(ref, "-") {
+			picks = append(picks, song.Song{Source: song.Wyy, ID: itoa(i)})
+		}
 	}
 
-	for _, pick := range []song.Song{
-		{Source: song.QQ, ID: "002hG4kq0WZBma"},
-		{Source: song.Kuwo, ID: "440615"},
-		{Source: song.Netease, ID: "1901371647"},
-		{Source: song.Kuwo, ID: "248"},
-		{Source: song.Netease, ID: "248"},
-	} {
+	for _, pick := range picks {
 		args := parseArgs(t, cmd, "/"+commandName+" "+pick.Ref())
 		got, ok := song.ParseRef(strings.Join(args.Words, " "))
 		if !ok {
-			t.Fatalf("%s 的短码没解回来: %q", pick.Source, args.Words)
+			t.Fatalf("%s %s 的短码没解回来: %q", pick.Source, pick.ID, args.Words)
 		}
 		if got.Source != pick.Source || got.ID != pick.ID {
 			t.Errorf("解成 %+v, want %+v", got, pick)
+		}
+		if args.Source != "" {
+			t.Errorf("%s 的短码被当成了 -s 的值: %q", pick.Ref(), args.Source)
 		}
 	}
 }
@@ -110,4 +117,18 @@ func parseArgs(t *testing.T, cmd *plugin.Command, msg string) *playArgs {
 		t.Fatalf("%q 解出来的是 %T", msg, parsed)
 	}
 	return args
+}
+
+func itoa(v int) string {
+	if v == 0 {
+		return "0"
+	}
+	var buf [12]byte
+	i := len(buf)
+	for v > 0 {
+		i--
+		buf[i] = byte('0' + v%10)
+		v /= 10
+	}
+	return string(buf[i:])
 }

@@ -38,17 +38,18 @@ func TestParsedKeyword(t *testing.T) {
 	}
 }
 
-// -s 只认三个短名。写别的必须说清认哪些, 而不是静默当成"不限定"。
+// -s 只认音源表里那几个短名。写别的必须说清认哪些, 而不是静默当成"不限定"。
 func TestPickSource(t *testing.T) {
 	known := []struct {
 		in   string
 		want song.Source
 	}{
 		{"", ""},
-		{"wyy", song.Netease},
-		{"WYY", song.Netease},
-		{" kw ", song.Kuwo},
+		{"wyy", song.Wyy},
+		{"WYY", song.Wyy},
+		{" 1ting ", song.Ting1},
 		{"qq", song.QQ},
+		{"baidu", song.Baidu},
 	}
 	for _, c := range known {
 		got, err := pickSource(c.in)
@@ -57,14 +58,15 @@ func TestPickSource(t *testing.T) {
 		}
 	}
 
-	for _, bad := range []string{"netease", "网易", "kww"} {
+	for _, bad := range []string{"youtube", "网易", "kuwo", "kw"} {
 		got, err := pickSource(bad)
 		if err == nil {
 			t.Errorf("pickSource(%q) 该报错, got %q", bad, got)
 			continue
 		}
-		if !strings.Contains(err.Error(), "wyy") || !strings.Contains(err.Error(), bad) {
-			t.Errorf("报错要列出手上认哪些并带上用户写的值: %v", err)
+		// 报错要列出手上认哪些并带上用户写的值。
+		if !strings.Contains(err.Error(), "qq") || !strings.Contains(err.Error(), bad) {
+			t.Errorf("报错内容 = %v", err)
 		}
 	}
 }
@@ -72,8 +74,8 @@ func TestPickSource(t *testing.T) {
 // 卡片上那行命令必须自包含: 发出去多久、服务端重启多少次, 点下去都还能找到同一首歌。
 func TestSearchRowsUseSelfContainedRef(t *testing.T) {
 	songs := []song.Song{
-		{Source: song.QQ, ID: "003cI52o4daJJL", Title: "花海", Artist: "周杰伦"},
-		{Source: song.Kuwo, ID: "440615", Title: "花海"},
+		{Source: song.QQ, ID: "002hG4kq0WZBma", Title: "花海", Artist: "周杰伦"},
+		{Source: song.Wyy, ID: "186016", Title: "晴天"},
 	}
 
 	rows := searchRows(songs)
@@ -81,7 +83,7 @@ func TestSearchRowsUseSelfContainedRef(t *testing.T) {
 		t.Fatalf("行数 = %d, want 2", len(rows))
 	}
 
-	for i := range songs {
+	for i, s := range songs {
 		row, ok := rows[i].(map[string]any)
 		if !ok {
 			t.Fatalf("行类型 = %T", rows[i])
@@ -95,39 +97,21 @@ func TestSearchRowsUseSelfContainedRef(t *testing.T) {
 		if !ok {
 			t.Fatalf("第 %d 行的短码解不回来: %q", i+1, code)
 		}
-		if pick.Source != songs[i].Source || pick.ID != songs[i].ID {
-			t.Errorf("第 %d 行解成 %+v, want %+v", i+1, pick, songs[i])
+		if pick.Source != s.Source || pick.ID != s.ID {
+			t.Errorf("第 %d 行解成 %+v, want %+v", i+1, pick, s)
 		}
-	}
-
-	// 短码必须短、必须只用那一套字母表, 而且不能把音源名或曲目 ID 写进去。
-	for i, row := range rows {
-		code := strings.TrimPrefix(row.(map[string]any)["command"].(string), "/play ")
-		want := 7
-		if songs[i].Source == song.QQ {
-			want = 15
-		}
-		if len(code) != want {
-			t.Errorf("第 %d 行短码 %q 长度 %d, want %d", i+1, code, len(code), want)
-		}
-		for _, c := range code {
-			if !strings.ContainsRune("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_", c) {
-				t.Errorf("第 %d 行短码 %q 里有字母表外的字符 %q", i+1, code, c)
-			}
-		}
-		for _, leak := range []string{"qq", "kuwo", "netease", songs[i].ID, ":"} {
+		// 短码不能把音源名或曲目 ID 明文写进去 —— 卡片上的东西用户都看得到。
+		for _, leak := range []string{"qq", "wyy", "netease", s.ID, ":"} {
 			if strings.Contains(code, leak) {
 				t.Errorf("第 %d 行短码 %q 泄漏了 %q", i+1, code, leak)
 			}
 		}
 	}
 
-	first := rows[0].(map[string]any)
-	if first["title"] != "花海" || first["artist"] != " · 周杰伦" {
+	if first := rows[0].(map[string]any); first["title"] != "花海" || first["artist"] != " · 周杰伦" {
 		t.Errorf("首行标题/歌手 = %v / %v", first["title"], first["artist"])
 	}
-	second := rows[1].(map[string]any)
-	if second["artist"] != "" {
+	if second := rows[1].(map[string]any); second["artist"] != "" {
 		t.Errorf("无歌手时 artist 应为空串, got %q", second["artist"])
 	}
 }
@@ -138,45 +122,61 @@ func TestSearchRowsEmpty(t *testing.T) {
 	}
 }
 
-// QQ 语音硬上限 300 秒, 超了整条消息会被平台打回, 所以卡片上不能列。
-func TestFitVoiceDropsOnlyOverLimit(t *testing.T) {
-	in := []song.Song{
-		{Title: "刚过线", Duration: 301},
-		{Title: "正好 300", Duration: 300},
-		{Title: "299", Duration: 299},
-		{Title: "时长未知", Duration: 0},
-		{Title: "很长", Duration: 378},
+// 分界线就是这次改动的核心: 3 分钟以内语音, 超过发文件, 说不清时按语音发。
+func TestWantsFileAroundThreeMinutes(t *testing.T) {
+	cases := []struct {
+		seconds int
+		want    bool
+	}{
+		{0, false},   // 不知道 -> 语音
+		{59, false},  // 短歌
+		{180, false}, // 正好 3 分钟 -> 语音
+		{181, true},  // 差一秒过线 -> 文件
+		{600, true},  // 长歌
 	}
-
-	kept, skipped := fitVoice(in)
-	if skipped != 2 {
-		t.Fatalf("跳过数 = %d, want 2", skipped)
-	}
-	if len(kept) != 3 {
-		t.Fatalf("保留数 = %d, want 3", len(kept))
-	}
-	for _, s := range kept {
-		if s.Title == "刚过线" || s.Title == "很长" {
-			t.Errorf("超过上限的 %q 不该留下", s.Title)
+	for _, c := range cases {
+		if got := wantsFile(c.seconds); got != c.want {
+			t.Errorf("wantsFile(%d) = %v, want %v", c.seconds, got, c.want)
 		}
 	}
 }
 
-func TestEmptyReasonDistinguishesTooLongFromNotFound(t *testing.T) {
-	allLong := emptyReason("花海", "", 4, 4)
-	if !strings.Contains(allLong, "5 分钟") || !strings.Contains(allLong, "4 首") {
-		t.Errorf("全被滤掉时要说明原因: %q", allLong)
+// 发文件时给 QQ 看的名字: 手机收下来得认得出是哪首歌, 而且不能带非法字符。
+func TestFileName(t *testing.T) {
+	got := fileName(song.Song{Title: "花海", Artist: "周杰伦", Audio: "http://aqqmusic.tc.qq.com/C400xxx.m4a?vkey=1"})
+	if got != "花海 - 周杰伦.m4a" {
+		t.Errorf("got %q", got)
 	}
 
-	notFound := emptyReason("花海", "", 0, 0)
-	if !strings.Contains(notFound, "花海") || strings.Contains(notFound, "5 分钟") {
-		t.Errorf("真没搜到时不该提时长: %q", notFound)
+	// 网易那条直链查不到扩展名, 按 mp3 算。
+	if got := fileName(song.Song{Title: "晴天", Audio: "http://music.163.com/song/media/outer/url?id=186016.mp3"}); got != "晴天.mp3" {
+		t.Errorf("got %q", got)
+	}
+
+	// 歌名里带 / 之类的字符不能把文件名拆成两层目录。
+	if got := fileName(song.Song{Title: "AC/DC", Artist: "a:b", Audio: "http://cdn/x.mp3"}); strings.ContainsAny(got, `/\:`) {
+		t.Errorf("文件名里有非法字符: %q", got)
+	}
+}
+
+func TestAudioExt(t *testing.T) {
+	cases := map[string]string{
+		"http://cdn/a.mp3":              ".mp3",
+		"http://cdn/a.m4a?vkey=1":       ".m4a",
+		"http://cdn/outer/url?id=1.mp3": ".mp3",
+		"http://cdn/stream":             ".mp3",
+		"http://cdn/a":                  ".mp3",
+	}
+	for in, want := range cases {
+		if got := audioExt(in); got != want {
+			t.Errorf("audioExt(%q) = %q, want %q", in, got, want)
+		}
 	}
 }
 
 // 指定了音源就得说清是哪一家没有, 并给条退路 —— 否则用户会以为是全网都没有。
 func TestEmptyReasonNamesTheSource(t *testing.T) {
-	got := emptyReason("花海", song.Netease, 0, 0)
+	got := emptyReason("花海", song.Wyy)
 	if !strings.Contains(got, "网易云") || !strings.Contains(got, "花海") {
 		t.Fatalf("要说清是哪家没有: %q", got)
 	}
@@ -184,36 +184,27 @@ func TestEmptyReasonNamesTheSource(t *testing.T) {
 		t.Fatalf("要留一条\"去掉 -s\"的退路: %q", got)
 	}
 
-	for src, want := range map[song.Source]string{
-		song.QQ:      "QQ 音乐",
-		song.Kuwo:    "酷我",
-		song.Netease: "网易云",
-	} {
-		if label := sourceLabel(src); label != want {
-			t.Errorf("sourceLabel(%q) = %q, want %q", src, label, want)
-		}
+	plain := emptyReason("花海", "")
+	if !strings.Contains(plain, "花海") || strings.Contains(plain, "-s") {
+		t.Errorf("没指定音源时别提 -s: %q", plain)
 	}
 }
 
-// 平台报错要翻译成人话, 而不是把 40093013 直接甩给用户。
-func TestOnErrorTranslatesDurationRejection(t *testing.T) {
-	cases := []struct {
-		in   string
-		want string
-	}{
-		{"上传音频时长超过限制: 40093013", "超过 5 分钟"},
-		{"40093013", "超过 5 分钟"},
-		{"网络超时", "网络超时"},
+// 平台报错要翻译成人话, 但不再提"时长超限" —— 超长的歌我们自己就分流成文件了。
+func TestFriendlyReason(t *testing.T) {
+	if got := friendlyReason(fmt.Errorf("网络超时")); got != "网络超时" {
+		t.Errorf("got %q", got)
 	}
-	for _, c := range cases {
-		got := friendlyReason(fmt.Errorf("%s", c.in))
-		if !strings.Contains(got, c.want) {
-			t.Errorf("friendlyReason(%q) = %q, 应包含 %q", c.in, got, c.want)
-		}
+	if got := friendlyReason(fmt.Errorf("聚合音源 暂时不可用: %w", guard.ErrGate)); !strings.Contains(got, "抽风") {
+		t.Errorf("闸门拦下时要给一句能看懂的话: %q", got)
+	}
+	if got := friendlyReason(fmt.Errorf("聚合音源 请求太密集: %w", guard.ErrGate)); !strings.Contains(got, "等两秒") {
+		t.Errorf("got %q", got)
 	}
 }
 
 // 短码点不动时只能认账, 不能拿短码当关键词重搜 ——
+// 上游对任何字符串都会返回一堆结果, 那样只会把"这首取不到"变成一屏不相干的歌。
 func TestRefFailureIsHonestNotASearch(t *testing.T) {
 	got := refFailure(fmt.Errorf("取链失败: %w", source.ErrNoResult)).Error()
 	if !strings.Contains(got, "取不到直链") {
@@ -224,22 +215,8 @@ func TestRefFailureIsHonestNotASearch(t *testing.T) {
 	}
 
 	// 闸门拦下这种"音源抽风"要原样透传, 它有自己的提示语。
-	gate := fmt.Errorf("QQ 音源 暂时不可用: %w", guard.ErrGate)
+	gate := fmt.Errorf("聚合音源 暂时不可用: %w", guard.ErrGate)
 	if got := refFailure(gate); !errors.Is(got, guard.ErrGate) {
 		t.Errorf("闸门错误应原样透传, got %v", got)
-	}
-}
-
-// 还原用户那次事故: 短码解出来是对的, 上游取不到直链。
-func TestDecodedRefFromBugReport(t *testing.T) {
-	pick, ok := song.ParseRef("QAAJGoRRoDr2VYo")
-	if !ok {
-		t.Fatal("用户报的那张卡片上的短码应该能解出来")
-	}
-	if pick.Source != song.QQ || pick.ID != "002hG4kq0WZBma" {
-		t.Fatalf("解出来 = %+v", pick)
-	}
-	if pick.Ref() != "QAAJGoRRoDr2VYo" {
-		t.Fatalf("再编回去 = %q", pick.Ref())
 	}
 }

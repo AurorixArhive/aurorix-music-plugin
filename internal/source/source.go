@@ -2,18 +2,21 @@ package source
 
 import (
 	"errors"
-	"strings"
-	"unicode"
 
 	"github.com/AurorixArhive/aurorix-music-plugin/internal/song"
 )
 
 var ErrNoResult = errors.New("未找到可播放的结果")
 
+// Source 一家音源。
+//
+// Search 只负责"有哪些歌", Detail 只负责"这一首怎么放" —— 分开是因为卡片要能
+// 放很久: 搜索时拿到的直链带 vkey, 过期就废, 所以卡片上只存 (音源, ID),
+// 真播的时候再按 ID 换一条新链。
 type Source interface {
 	Name() song.Source
 	Search(keyword string, limit int) ([]song.Song, error)
-	Audio(pick song.Song) (string, error)
+	Detail(id string) (song.Song, error)
 }
 
 type Chain []Source
@@ -47,19 +50,13 @@ func (c Chain) SearchOn(only song.Source, keyword string, limit int) ([]song.Son
 	return owner.Search(keyword, limit)
 }
 
-func (c Chain) Audio(pick song.Song) (string, error) {
+// Detail 按卡片上的 (音源, ID) 换一条当前可用的直链。
+func (c Chain) Detail(pick song.Song) (song.Song, error) {
 	owner := c.owner(pick.Source)
 	if owner == nil {
-		return "", ErrNoResult
+		return song.Song{}, ErrNoResult
 	}
-	link, err := owner.Audio(pick)
-	if err == nil {
-		return link, nil
-	}
-	if alt, ok := c.match(pick); ok {
-		return alt, nil
-	}
-	return "", err
+	return owner.Detail(pick.ID)
 }
 
 func (c Chain) owner(name song.Source) Source {
@@ -69,59 +66,6 @@ func (c Chain) owner(name song.Source) Source {
 		}
 	}
 	return nil
-}
-
-func (c Chain) match(pick song.Song) (string, bool) {
-	title := normalize(pick.Title)
-	if title == "" {
-		return "", false
-	}
-	artist := normalize(pick.Artist)
-	var loose *song.Song
-
-	for _, src := range c {
-		if src.Name() == pick.Source {
-			continue
-		}
-		songs, err := src.Search(pick.Title, 10)
-		if err != nil {
-			continue
-		}
-		for _, cand := range songs {
-			if normalize(cand.Title) != title {
-				continue
-			}
-			if artist != "" && normalize(cand.Artist) != artist {
-				if loose == nil {
-					fallback := cand
-					loose = &fallback
-				}
-				continue
-			}
-			if link, err := src.Audio(cand); err == nil {
-				return link, true
-			}
-		}
-	}
-
-	if loose == nil {
-		return "", false
-	}
-	if src := c.owner(loose.Source); src != nil {
-		if link, err := src.Audio(*loose); err == nil {
-			return link, true
-		}
-	}
-	return "", false
-}
-
-func normalize(value string) string {
-	return strings.Map(func(r rune) rune {
-		if unicode.IsSpace(r) || strings.ContainsRune("()（）[]【】-—_·,，.。!！?？&+/、'\"“”", r) {
-			return -1
-		}
-		return unicode.ToLower(r)
-	}, value)
 }
 
 // normal 把"上游正常回答但没结果"和"上游真出故障"分开 —— 前者不该触发熔断。

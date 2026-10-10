@@ -188,7 +188,7 @@ func TestGateStopsCountingNormalMissesAsFailures(t *testing.T) {
 }
 
 func TestFlightSharesResultWhileInFlight(t *testing.T) {
-	f := NewFlight()
+	f := NewFlight[string]()
 	var calls atomic.Int64
 	started := make(chan struct{})
 	release := make(chan struct{})
@@ -231,7 +231,7 @@ func TestFlightSharesResultWhileInFlight(t *testing.T) {
 }
 
 func TestFlightSeparatesDifferentKeys(t *testing.T) {
-	f := NewFlight()
+	f := NewFlight[string]()
 	var calls atomic.Int64
 
 	for _, key := range []string{"q:001", "q:002", "k:003"} {
@@ -249,7 +249,7 @@ func TestFlightSeparatesDifferentKeys(t *testing.T) {
 }
 
 func TestFlightForgetsCallAfterItFinishes(t *testing.T) {
-	f := NewFlight()
+	f := NewFlight[string]()
 	var calls atomic.Int64
 
 	for i := 0; i < 3; i++ {
@@ -266,7 +266,7 @@ func TestFlightForgetsCallAfterItFinishes(t *testing.T) {
 }
 
 func TestFlightPropagatesError(t *testing.T) {
-	f := NewFlight()
+	f := NewFlight[string]()
 	want := errors.New("上游挂了")
 
 	_, err := f.Do("q:001", func() (string, error) { return "", want })
