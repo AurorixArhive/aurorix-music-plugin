@@ -97,6 +97,16 @@ go test ./...                                   # 全部离线用例: 音源解�
 go test ./internal/source/ -run Live -v         # 真实网络用例, 需联网
 ```
 
+## 更新
+
+本插件是标准 Go module，发新版靠 git tag。使用方一行升级：
+
+```bash
+aurx update github.com/AurorixArhive/aurorix-music-plugin
+```
+
+`aurx update` = `go get -u` + `go mod tidy` + 编译校验；跑完 `aurx run` 重启实例即可。
+
 ## 许可
 
 代码采用 [MIT](LICENSE) 协议。
