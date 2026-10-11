@@ -2,23 +2,15 @@ package song
 
 import "strconv"
 
-// 卡片上那行可点命令的全部内容。它必须自包含 —— 服务端不留任何状态,
-// 所以卡片发出去多久、机器人重启多少次, 点下去都还能找到同一首歌。
+// 卡片上那行可点命令的全部内容。它必须自包含: 服务端不留状态, 所以卡片发出去多久、
+// 机器人重启多少次, 点下去都还能找到同一首歌。
 //
-// 打包方式是 6 bit 一字符的自定义字母表(64 个字符, 不含 +/=/&/% 这些在 mqqapi
-// 链接里要转义、或在输入框里看着别扭的字符):
+//	version 2 | mode 1 | platform 4 | 载荷 | check 4
 //
-//	version 2 | mode 1 | source 4 | 载荷 | check 4
-//
-// 载荷两选一, 由 mode 那一位区分:
-//
-//	mode 0  纯数字 ID 直接塞 36 位 —— 网易/一听/百度的 ID 都是数字, 编出 8 字符
-//	mode 1  带字母的 ID(qq 的 14 位 mid)按每字符 6 位塞, 前面加 5 位长度, 编出 17 字符
-//
-// 刻意不用大数运算: 62^14 装不进 uint64, 硬上 math/big 会慢一个量级。
+// mode 0 纯数字 ID 直接塞 36 位(网易/酷我的 id 都是这个量级);
+// mode 1 其余按每字符 6 位塞, 前面带 5 位长度(QQ 的 mid、酷狗的 hash、咪咕 18 位数字版权号)。
 const refAlphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
 
-// refDigits 是 ID 用的 62 进制数字表, 顺序与 qq 的 mid 一致(id 是 62 进制, 不是自己的随机串)。
 const refDigits = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
 
 const (
@@ -27,12 +19,8 @@ const (
 	refLenBits   = 5
 	refMaxChars  = 31
 	refCheckBits = 4
-
-	// 短码长度落在 [8, 34]: 8 是纯数字那一档, 34 是 31 字符 ID 那一档。
-	// 这是个粗筛 —— 关键词绝大多数连这一关都过不了, 过了的交给音源编号和校验位。
-	// 音源编号只有 4 位、目前只用了 0-3, 所以"长得像短码"和"真是短码"之间隔得很远。
-	refMinLen = 8
-	refMaxLen = 34
+	refMinLen    = 8
+	refMaxLen    = 34
 )
 
 var (
@@ -72,8 +60,6 @@ func (w *refWriter) put(v uint64, bits uint) {
 	}
 }
 
-// finish 追一个校验位段再收尾。校验只防手滑和"关键词恰好长得像短码",
-// 不是安全机制 —— 短码本来就不需要保密。
 func (w *refWriter) finish() string {
 	w.put(uint64(w.crc)&(1<<refCheckBits-1), refCheckBits)
 	if w.n > 0 {
@@ -91,7 +77,6 @@ type refReader struct {
 	crc uint8
 }
 
-// get 一次取 bits 位。越过末尾的部分按 0 补 —— 写入端也是这么补的, 所以不用先知道总长。
 func (r *refReader) get(bits uint) uint64 {
 	for r.n < bits {
 		var group uint64
@@ -113,9 +98,8 @@ func (r *refReader) get(bits uint) uint64 {
 	return v
 }
 
-// encodeRef 把 (音源, 曲目 ID) 编成短码; 编不出来就返回 false, 由调用方退回明文形式。
-func encodeRef(src Source, id string) (string, bool) {
-	index, ok := src.index()
+func encodeRef(platform Platform, id string) (string, bool) {
+	index, ok := platform.index()
 	if !ok {
 		return "", false
 	}
@@ -146,8 +130,7 @@ func encodeRef(src Source, id string) (string, bool) {
 	return w.finish(), true
 }
 
-func decodeRef(code string) (Source, string, bool) {
-	// 长度先卡死: 关键词绝大多数连这一关都过不了
+func decodeRef(code string) (Platform, string, bool) {
 	if len(code) < refMinLen || len(code) > refMaxLen {
 		return "", "", false
 	}
@@ -157,7 +140,7 @@ func decodeRef(code string) (Source, string, bool) {
 		return "", "", false
 	}
 	mode := r.get(1)
-	src, ok := sourceAt(r.get(4))
+	platform, ok := refPlatformAt(r.get(4))
 	if !ok {
 		return "", "", false
 	}
@@ -185,24 +168,24 @@ func decodeRef(code string) (Source, string, bool) {
 		id = strconv.FormatUint(value, 10)
 	}
 
-	// 校验位要先取出来再读: get 自己会更新 crc, 写在同一个表达式里两个操作数谁先算就说不准了。
+	// 校验位要先取出来再读 get: get 自己会更新 crc。
 	want := r.crc & (1<<refCheckBits - 1)
 	if uint8(r.get(refCheckBits)) != want {
 		return "", "", false
 	}
-	return src, id, true
+	return platform, id, true
 }
 
-func (s Source) index() (int, bool) {
-	for i, src := range all {
-		if src == s {
+func (p Platform) index() (int, bool) {
+	for i, item := range all {
+		if item == p {
 			return i, true
 		}
 	}
 	return 0, false
 }
 
-func sourceAt(index uint64) (Source, bool) {
+func refPlatformAt(index uint64) (Platform, bool) {
 	if index >= uint64(len(all)) {
 		return "", false
 	}

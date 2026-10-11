@@ -1,4 +1,4 @@
-package source
+package netx
 
 import (
 	"io"
@@ -8,9 +8,9 @@ import (
 	"time"
 )
 
-// probeClient 只服务探测, 所以单独一条 http.Client: 它要"只读一小段就断开",
+// probeHTTP 只服务探测, 所以单独一条 http.Client: 它要"只读一小段就断开",
 // 而 requests 那条路会把整段正文读进内存 —— 取 64KB 和取整个文件在这里是两回事。
-var probeClient = &http.Client{Timeout: 15 * time.Second}
+var probeHTTP = &http.Client{Timeout: 15 * time.Second}
 
 // probeUA 是探测时的 UA; 少数 CDN 对空 UA 直接 403。
 const probeUA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"
@@ -38,7 +38,7 @@ func Inspect(rawURL string) (Audio, error) {
 	req.Header.Set("Range", "bytes=0-"+strconv.Itoa(probeBytes-1))
 	req.Header.Set("User-Agent", probeUA)
 
-	resp, err := probeClient.Do(req)
+	resp, err := probeHTTP.Do(req)
 	if err != nil {
 		return Audio{}, err
 	}
@@ -75,12 +75,33 @@ func contentRangeTotal(value string) (int64, bool) {
 	return n, err == nil && n > 0
 }
 
-// seconds 按时长从容器头里读。mp4/m4a 读 mvhd, mp3 读首帧(有 Xing 就按帧数)。
+// seconds 按时长从容器头里读: FLAC 读 STREAMINFO, mp4/m4a 读 mvhd, mp3 读首帧(有 Xing 就按帧数)。
 func seconds(head []byte, size int64) int {
+	if s, ok := flacSeconds(head); ok {
+		return s
+	}
 	if s, ok := mp4Seconds(head); ok {
 		return s
 	}
-	return mp3Seconds(head, size)
+	// mp3 是"扫同步字"的启发式: 撞上别的容器会读出离谱的时长, 超过 6 小时一律当没读出来。
+	if s := mp3Seconds(head, size); s > 0 && s <= 6*3600 {
+		return s
+	}
+	return 0
+}
+
+// flacSeconds 从 STREAMINFO 里取时长: 采样率 20 位、总采样数 36 位, 位置都是定死的。
+// 不认它的话 mp3 那条启发式会在 FLAC 数据里撞上假同步字(实测把 5 分钟的歌算成 61 分钟)。
+func flacSeconds(head []byte) (int, bool) {
+	if len(head) < 26 || string(head[:4]) != "fLaC" || head[4]&0x7F != 0 {
+		return 0, false
+	}
+	rate := int(head[18])<<12 | int(head[19])<<4 | int(head[20])>>4
+	total := int64(head[21]&0x0F)<<32 | int64(head[22])<<24 | int64(head[23])<<16 | int64(head[24])<<8 | int64(head[25])
+	if rate <= 0 || total <= 0 {
+		return 0, false
+	}
+	return int(total / int64(rate)), true
 }
 
 // mp4Seconds 从 moov/mvhd 里取时长。选它是为了快: 直播外的成片都在头部放了 moov
@@ -215,6 +236,16 @@ func mp3Seconds(head []byte, size int64) int {
 		bitrate := mp3Bitrates[row][3-layer][brIdx] * 1000
 		if rate == 0 || bitrate == 0 {
 			return 0
+		}
+		// ID3 里混着假的同步字节: 单看一个头会把比特率读成个位数、算成几十小时的时长。
+		// 真帧的下一帧头必须正好落在按帧长算出的位置上。
+		padding := int(head[i+2]>>1) & 0x01
+		frameLen := 144*bitrate/rate + padding
+		if version != 3 {
+			frameLen = 72*bitrate/rate + padding
+		}
+		if i+frameLen+4 > len(head) || head[i+frameLen] != 0xFF || head[i+frameLen+1]&0xE0 != 0xE0 {
+			continue
 		}
 		if frames, ok := xingFrames(head[i:], version, head[i+3]>>6 == 3); ok {
 			per := 1152

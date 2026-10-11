@@ -105,6 +105,23 @@ func (b *Breaker) Allow() bool {
 }
 
 // Done 回报结果: 成功复位, 失败累计, 够次数就断开。
+// Cooling 只读地问一句"现在是不是被熔断挡着": 不占额度, 也不推进半开状态。
+// 状态汇报必须走它 —— Allow() 会把半开状态推进一格, 拿它当只读检查会把熔断卡死。
+func (b *Breaker) Cooling() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	switch b.state {
+	case breakerOpen:
+		return b.now().Before(b.openUntil)
+	case breakerHalfOpen:
+		return b.probing
+	}
+	return false
+}
+
+// Cooling 见 Breaker.Cooling。
+func (g *Gate) Cooling() bool { return g.breaker.Cooling() }
+
 func (b *Breaker) Done(ok bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
