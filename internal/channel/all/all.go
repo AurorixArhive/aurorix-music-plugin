@@ -2,6 +2,10 @@
 package all
 
 import (
+	_ "github.com/AurorixArhive/aurorix-music-plugin/internal/channel/haitangw"
+	_ "github.com/AurorixArhive/aurorix-music-plugin/internal/channel/nianxin"
+	_ "github.com/AurorixArhive/aurorix-music-plugin/internal/channel/yunxi"
+
 	_ "github.com/AurorixArhive/aurorix-music-plugin/internal/channel/ikun"
 	_ "github.com/AurorixArhive/aurorix-music-plugin/internal/channel/molan"
 	_ "github.com/AurorixArhive/aurorix-music-plugin/internal/channel/xinghai"

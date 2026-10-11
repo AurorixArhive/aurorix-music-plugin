@@ -26,12 +26,16 @@ aurx run          # 先把 appid / secret 填进 config.json
 
 | 音源 | 渠道 | 走什么 |
 |---|---|---|
-| `qq` | `qq.official` | QQ 官方 musicu.fcg；会员曲要填 Cookie |
+| `qq` | `qq.yunxi` | 云汐 `a.aa.cab`，按歌名+歌手取链 |
+| | `qq.haitangw` | 海棠湾 `musicserver.haitangw.cc`，按 songmid 取链 |
+| | `qq.nianxin` | 念心 `mcp.nianxinxz.com`，按 songmid 取链 |
 | `kugou` | `kg.molan` | 海棠湾聚合，拿不到再问酷狗官方 |
 | `kuwo` | `kuwo.xinghai` | 酷我官方直连 |
 | `wyy` | `wyy.ikun` | 网易云官方搜索 + IKUN(`c.wwwweb.top`)取链 |
 
 不带 `-s` 时按**默认优先级 qq → kugou → kuwo → wyy** 找，前一家没结果才试下一家。
+
+QQ 的搜索统一走云汐；三条渠道都是免登录的第三方接口，会员曲也拿得到。
 
 ## 配置
 
@@ -41,7 +45,6 @@ aurx run          # 先把 appid / secret 填进 config.json
 |---|---|
 | 音源优先级 | 逗号分隔，改不带 `-s` 时的顺序 |
 | 关闭的音源 | 关掉的不进默认顺序，`-s` 仍可用 |
-| QQ 音乐 Cookie | 粘 y.qq.com 的 Cookie 才能听会员曲，留空只有免费曲 |
 
 ## 加音源
 
