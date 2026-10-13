@@ -1,6 +1,10 @@
 package netx
 
-import "testing"
+import (
+	"net/http"
+	"net/http/httptest"
+	"testing"
+)
 
 // FLAC 必须走 STREAMINFO: 否则后面的 mp3 扫描会在 FLAC 数据里撞上假同步字,
 // 把 5 分钟的歌算成 61 分钟(真踩过)。
@@ -60,4 +64,93 @@ func put36(dst []byte, value int64) {
 	dst[2] = byte(value >> 16)
 	dst[3] = byte(value >> 8)
 	dst[4] = byte(value)
+}
+
+// 酷我的 .mflac 是加密过的 octet-stream: 读不出时长, 但体积是真的 —— 这种活链不能判死。
+func TestInspectAcceptsEncryptedOctetStream(t *testing.T) {
+	big := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.Header().Set("Content-Range", "bytes 0-65535/18180574")
+		w.WriteHeader(http.StatusPartialContent)
+		_, _ = w.Write([]byte("R.\x0d+v465N$3{Dyq.l"))
+	}))
+	defer big.Close()
+
+	got, err := Inspect(big.URL)
+	if err != nil {
+		t.Fatalf("探测失败: %v", err)
+	}
+	if !got.Playable {
+		t.Errorf("加密的音频被当成不可播: %+v", got)
+	}
+}
+
+// 正文是空的, 不管挂着什么类型都不算音频。
+func TestInspectRejectsEmptyBody(t *testing.T) {
+	empty := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.WriteHeader(http.StatusPartialContent)
+	}))
+	defer empty.Close()
+
+	got, err := Inspect(empty.URL)
+	if err != nil {
+		t.Fatalf("探测失败: %v", err)
+	}
+	if got.Playable {
+		t.Errorf("空正文被当成音频: %+v", got)
+	}
+}
+
+// 上游有时拿 JSON 当报错正文, 这个也不能认。
+func TestInspectRejectsJSONError(t *testing.T) {
+	bad := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"code":400,"message":"no resource"}`))
+	}))
+	defer bad.Close()
+
+	got, err := Inspect(bad.URL)
+	if err != nil {
+		t.Fatalf("探测失败: %v", err)
+	}
+	if got.Playable {
+		t.Errorf("JSON 报错被当成音频: %+v", got)
+	}
+}
+
+// 网易把付费曲回成一张 200 的 404 网页, 类型是 text/html —— 体积再大也不算音频。
+func TestInspectRejectsErrorPage(t *testing.T) {
+	page := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Header().Set("Content-Range", "bytes 0-99999/100000")
+		w.WriteHeader(http.StatusPartialContent)
+		_, _ = w.Write([]byte("<html>404</html>"))
+	}))
+	defer page.Close()
+
+	got, err := Inspect(page.URL)
+	if err != nil {
+		t.Fatalf("探测失败: %v", err)
+	}
+	if got.Playable {
+		t.Errorf("网页被当成音频: %+v", got)
+	}
+}
+
+// 酷我的 .mflac/.mgg 是加密格式: 文件是真的, 内容谁都解不开 —— 当成不可播,
+// 调度才会去换别的渠道, 而不是发一条叫 xxx.mp3 的"损坏文件"。
+func TestInspectRejectsEncryptedFormats(t *testing.T) {
+	for _, u := range []string{
+		"https://car-er.kuwo.cn/x/Q0M00044t2fe2.mflac?vkey=abc",
+		"https://x/y.mgg",
+		"https://x/y.mflac0",
+	} {
+		if _, err := Inspect(u); err == nil {
+			t.Errorf("加密格式该直接报错: %s", u)
+		}
+	}
+	if encrypted("https://x/y.mp3") || encrypted("https://x/y.flac") {
+		t.Error("普通格式被当成加密的了")
+	}
 }

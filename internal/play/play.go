@@ -22,7 +22,7 @@ import (
 )
 
 const (
-	commandName  = "play"
+	commandName  = "点歌"
 	maxResults   = 10
 	voiceSeconds = 5 * 60
 	resolveLimit = 25 * time.Second
@@ -46,7 +46,7 @@ type playArgs struct {
 func (p *Play) Command() *plugin.Command {
 	return &plugin.Command{
 		Prefix:      commandName,
-		Aliases:     []string{"点歌", "点播", "music"},
+		Aliases:     []string{"play", "点播", "music"},
 		Role:        constant.RoleMember,
 		Describe:    "搜歌, 短的发语音、长的发文件, 可用 -s 指定音源",
 		Args:        &playArgs{},
@@ -68,7 +68,8 @@ func (p *Play) handle(ctx *botcontext.MessageContext) error {
 
 	target, err := pickSource(args.Source)
 	if err != nil {
-		return err
+		// -s 写错了是用户自己的输入问题, 这句得让他看懂; 别的失败一律回一句通用的。
+		return p.render(ctx, "fail", &templates.Args{"reason": err.Error()})
 	}
 	return p.search(ctx, keyword, target)
 }
@@ -99,7 +100,7 @@ func (p *Play) deliver(ctx *botcontext.MessageContext, pick song.Song, channelID
 
 	found, err := p.scheduler.Resolve(callCtx, pick, channelID)
 	if err != nil {
-		return refFailure(err)
+		return err
 	}
 	if err := p.sendAudio(ctx, found); err != nil {
 		return err
@@ -157,8 +158,9 @@ func (p *Play) render(ctx *botcontext.MessageContext, id string, args *templates
 	return msg.Send()
 }
 
+// onError 给用户只留一句人话, 细节进日志 —— 上游报错里带着直链和接口名。
 func (p *Play) onError(ctx *botcontext.MessageContext, err error) error {
-	return p.render(ctx, "fail", &templates.Args{"reason": friendlyReason(err)})
+	return p.render(ctx, "fail", &templates.Args{"reason": failReason(err)})
 }
 
 func searchRows(songs []song.Song) []any {
@@ -175,13 +177,6 @@ func searchRows(songs []song.Song) []any {
 		})
 	}
 	return rows
-}
-
-func refFailure(err error) error {
-	if errors.Is(err, schedule.ErrAllChannels) {
-		return errors.New("这个音源的渠道现在都不通, 换一个音源试试(加 -s)")
-	}
-	return err
 }
 
 func emptyReason(keyword string, want target, err error) string {
@@ -206,15 +201,26 @@ func fileName(s song.Song) string {
 	return name + audioExt(s.Audio)
 }
 
+// audioExt 后缀按直链的真实格式来: 一律写 .mp3 会让 m4a/flac 被播放器认错,
+// 用户那边看到的就是"一个打不开的 mp3"。
 func audioExt(rawURL string) string {
 	if i := strings.IndexByte(rawURL, '?'); i >= 0 {
 		rawURL = rawURL[:i]
 	}
-	switch ext := strings.ToLower(path.Ext(rawURL)); ext {
-	case ".mp3", ".m4a", ".flac", ".wav", ".aac", ".ogg", ".ape":
+	ext := strings.ToLower(path.Ext(rawURL))
+	if len(ext) >= 2 && len(ext) <= 6 && isExtChars(ext[1:]) {
 		return ext
 	}
 	return ".mp3"
+}
+
+func isExtChars(ext string) bool {
+	for _, r := range ext {
+		if (r < 'a' || r > 'z') && (r < '0' || r > '9') {
+			return false
+		}
+	}
+	return true
 }
 
 func parsed(ctx *botcontext.MessageContext) *playArgs {
@@ -257,13 +263,11 @@ func platformNames() []string {
 	return out
 }
 
-func friendlyReason(err error) string {
-	reason := err.Error()
-	if strings.Contains(reason, "暂时不可用") {
-		return fmt.Sprintf("音源临时抽风了, 重新发一次 /%s <歌名> 会自动换别的渠道", commandName)
-	}
-	if strings.Contains(reason, "请求太密集") {
-		return "刚刚点的人有点多, 等两秒再来"
-	}
-	return reason
+// friendlyReason 把内部报错翻成人话: 上游的报错里带着直链、接口名和 traceId,
+// 那些只该进日志 —— 群里甩出一串 vkey, 用户只会以为机器人坏了。
+// failReason 拿不到歌时给用户的唯一一句话 —— 上游的直链、接口名和 traceId 只该进日志,
+// 甩到群里用户只会以为机器人坏了。具体哪一步坏了看上面那行 Warn。
+func failReason(err error) string {
+	log.Warnf("点歌失败: %v", err)
+	return "获取歌曲失败，换一首或换个关键词重试"
 }

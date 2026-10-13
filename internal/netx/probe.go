@@ -1,8 +1,10 @@
 package netx
 
 import (
+	"errors"
 	"io"
 	"net/http"
+	"path"
 	"strconv"
 	"strings"
 	"time"
@@ -25,12 +27,28 @@ type Audio struct {
 	Seconds  int   // 时长; 0 表示容器头里没读出来
 }
 
+// encrypted 认酷我的加密格式: 文件是真的, 内容加过密, 谁打开都只会说"文件损坏"。
+func encrypted(rawURL string) bool {
+	if i := strings.IndexByte(rawURL, '?'); i >= 0 {
+		rawURL = rawURL[:i]
+	}
+	switch strings.ToLower(path.Ext(rawURL)) {
+	case ".mflac", ".mgg", ".mflac0", ".mgg1":
+		return true
+	}
+	return false
+}
+
 // Inspect 摸一下这个直链: 是音频吗? 多长?
 //
 // 一次请求同时解决三件事 —— 可用性(响应类型)、总长(Content-Range)、时长(容器头)。
 // 只读前 64KB 就断开, 所以 4MB 的歌和 40MB 的歌在这里开销一样。
 // 计时不受 Range 支持与否影响: 上游忽略 Range 时也只是多读了 64KB。
 func Inspect(rawURL string) (Audio, error) {
+	// 加密格式直接判死: 交给发送只会得到一条叫 xxx.mp3 的"损坏文件", 不如让调度去换渠道。
+	if encrypted(rawURL) {
+		return Audio{}, errors.New("这条是加密格式(酷我的 .mflac/.mgg), 谁都放不了")
+	}
 	req, err := http.NewRequest("GET", rawURL, nil)
 	if err != nil {
 		return Audio{}, err
@@ -58,11 +76,17 @@ func Inspect(rawURL string) (Audio, error) {
 	if i := strings.IndexByte(kind, ';'); i >= 0 {
 		kind = strings.TrimSpace(kind[:i])
 	}
-	// 认 audio/* 是主线; 少数 CDN 回 octet-stream, 那就以"容器头读得出时长"为准 ——
-	// 网易把付费曲回成一张 200 的 404 网页, 类型是 text/html, 两条都过不了。
-	out.Playable = resp.StatusCode < 400 &&
-		(strings.HasPrefix(kind, "audio/") || (kind == "application/octet-stream" && out.Seconds > 0))
+	// 判"上游给的是不是一段音频"只认硬信号, 不做正面证明:
+	// 状态码不对、正文是空的、或者类型一眼就不是媒体(text/html、application/json) —— 直接否;
+	// 其余一律放行。酷我的 .mflac 是加密的, 读不出时长也认不出容器, 但链是活的;
+	// 网易那种 200 的假 404 是 text/html, 这里挡得住。
+	out.Playable = resp.StatusCode < 400 && len(head) > 0 && !notMedia(kind)
 	return out, nil
+}
+
+// notMedia 是"一眼就知道不是音频"的类型: 报错网页和 JSON 都属于这类。
+func notMedia(kind string) bool {
+	return strings.HasPrefix(kind, "text/") || kind == "application/json" || kind == "application/xml"
 }
 
 // contentRangeTotal 从 "bytes 0-65535/3512553" 里取总长。

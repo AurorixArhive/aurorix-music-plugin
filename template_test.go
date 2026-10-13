@@ -16,8 +16,8 @@ func TestSearchTemplateRendersQuotedInlineLinks(t *testing.T) {
 		"keyword": "花海",
 		"total":   "2",
 		"songs": []any{
-			map[string]any{"title": "花海", "artist": " · 周杰伦", "command": "/play QAAMywUJgQ0q229"},
-			map[string]any{"title": "花海", "artist": " · 中孝介", "command": "/play QAAO5-Ec0F1EwT2"},
+			map[string]any{"title": "花海", "artist": " · 周杰伦", "command": "/点歌 QAAMywUJgQ0q229"},
+			map[string]any{"title": "花海", "artist": " · 中孝介", "command": "/点歌 QAAO5-Ec0F1EwT2"},
 		},
 	})
 	if err != nil {
@@ -28,7 +28,7 @@ func TestSearchTemplateRendersQuotedInlineLinks(t *testing.T) {
 	for _, want := range []string{
 		"# 🎵 花海",
 		"共 2 首 · 点蓝色歌名直接发送",
-		"> [花海](mqqapi://aio/inlinecmd?command=%2Fplay+QAAMywUJgQ0q229",
+		"> [花海](mqqapi://aio/inlinecmd?command=%2F%E7%82%B9%E6%AD%8C+QAAMywUJgQ0q229",
 		" · 周杰伦",
 		" · 中孝介",
 	} {
