@@ -2,7 +2,7 @@ module github.com/AurorixArhive/aurorix-music-plugin
 
 go 1.26
 
-require github.com/KasumiYuku/Aurorix v0.2.0
+require github.com/KasumiYuku/Aurorix v0.3.1-0.20261013090804-cbead4b1e9ed
 
 require (
 	github.com/KasumiYuku/ink v0.5.0 // indirect
