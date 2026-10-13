@@ -17,6 +17,7 @@ import (
 	"github.com/KasumiYuku/Aurorix/lib/plugin"
 	"github.com/KasumiYuku/Aurorix/lib/templates"
 
+	"github.com/AurorixArhive/aurorix-music-plugin/internal/meta"
 	"github.com/AurorixArhive/aurorix-music-plugin/internal/quality"
 	"github.com/AurorixArhive/aurorix-music-plugin/internal/schedule"
 	"github.com/AurorixArhive/aurorix-music-plugin/internal/song"
@@ -29,6 +30,8 @@ const (
 	resolveLimit = 25 * time.Second
 	// fileBytes 是先下载再上传的上限: 超过就退回直传, 不把内存吃满。
 	fileBytes = 64 << 20
+	// templateSongCard 是发音频前先发的那张歌曲卡(见 templates/markdown/songcard.md)。
+	templateSongCard = "songcard"
 )
 
 var log = logx.New("music")
@@ -103,10 +106,49 @@ func (p *Play) deliver(ctx *botcontext.MessageContext, pick song.Song, channelID
 	if err != nil {
 		return err
 	}
+	// 短码只带得回平台和 ID(见 song/codec.go) —— 点下来的这一刻, 标题/作者/封面已经不在手里了。
+	// 发卡前按 ID 问一次平台把它们补回来(见 internal/meta); 问不到就原样返回, 卡片会自己跳过。
+	found = meta.Fill(callCtx, found)
+
+	// 卡片先发: 用户在音频/文件到达之前就看到了标题、作者和封面, 也拿到了封面。
+	// 卡片发失败不算失败 —— 音频才是主角, 不能因为一张卡片就放弃整首歌。
+	if err := p.sendCard(ctx, found); err != nil {
+		log.Warnf("发卡片失败(不影响音频): %v", err)
+	}
 	if err := p.sendAudio(ctx, found); err != nil {
 		return err
 	}
 	return nil
+}
+
+// sendCard 发那张 id=2 的卡片: 封面 + 标题 + 作者, 点开跳到歌曲页。
+//
+// 卡片由 templates/markdown/songcard.md 描述而不是在 Go 里拼字符串: 参数编码、
+// 可选参数的省略都由模板那层负责, 这里只给值 —— 标题里带 & 或空格也不会把卡片弄坏。
+// 空值传空串即可, 模板会把整个参数省掉(空参数和缺参数在客户端是两种结果)。
+func (p *Play) sendCard(ctx *botcontext.MessageContext, found song.Song) error {
+	if !cardWorthSending(found) {
+		return nil
+	}
+	card, err := ctx.MarkdownTemplate(templateSongCard, &templates.Args{
+		"cover":  found.Cover,
+		"link":   found.WebURL(),
+		"title":  found.Title,
+		"artist": found.Artist,
+	})
+	if err != nil {
+		return err
+	}
+	// 这张卡自己就是一条完整消息, 底下再压一行底部按钮等于把它切成两块 —— 这一条不要。
+	// 音频跟在后面发, 是媒体消息, 本来就轮不到底部按钮。
+	card.NoFooter = true
+	return card.Send()
+}
+
+// cardWorthSending 卡片上至少得有一行标题或一张封面才值得发。
+// 一个参数都凑不出来的卡, 在客户端就是一个空壳 —— 那还不如不发(见 internal/meta)。
+func cardWorthSending(s song.Song) bool {
+	return strings.TrimSpace(s.Title) != "" || strings.TrimSpace(s.Cover) != ""
 }
 
 func (p *Play) sendAudio(ctx *botcontext.MessageContext, found song.Song) error {

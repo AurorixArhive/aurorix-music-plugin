@@ -1,0 +1,1 @@
+{{qqcard 2 leftImageUrl=cover scheme=link text1=title text2=artist}}

@@ -22,13 +22,16 @@ type PlatformInfo struct {
 	Platform Platform
 	CN       string
 	Aliases  []string
+	// WebURL 是"这首歌在网页上的地址", 用 %s 占位歌曲 ID。
+	// 空表示该平台没有可跳转的公开页面 —— 那时卡片就不带跳转, 而不是给一个假链接。
+	WebURL string
 }
 
 var infos = []PlatformInfo{
-	{QQ, "QQ音乐", []string{"qq", "qqmusic", "tencent", "tx", "腾讯", "qq音乐"}},
-	{Kugou, "酷狗", []string{"kugou", "kg", "酷狗", "酷狗音乐"}},
-	{Kuwo, "酷我", []string{"kuwo", "kw", "酷我", "酷我音乐"}},
-	{Wyy, "网易云", []string{"wyy", "wy", "netease", "wangyi", "163", "网易", "网易云", "网易云音乐"}},
+	{QQ, "QQ音乐", []string{"qq", "qqmusic", "tencent", "tx", "腾讯", "qq音乐"}, "https://y.qq.com/n/ryqq/songDetail/%s"},
+	{Kugou, "酷狗", []string{"kugou", "kg", "酷狗", "酷狗音乐"}, "https://www.kugou.com/song/#hash=%s"},
+	{Kuwo, "酷我", []string{"kuwo", "kw", "酷我", "酷我音乐"}, "https://www.kuwo.cn/play_detail/%s"},
+	{Wyy, "网易云", []string{"wyy", "wy", "netease", "wangyi", "163", "网易", "网易云", "网易云音乐"}, "https://music.163.com/#/song?id=%s"},
 }
 
 func All() []Platform { return append([]Platform(nil), all...) }
@@ -112,6 +115,18 @@ func (s Song) Ref() string {
 		return code
 	}
 	return string(s.Platform) + ":" + s.ID
+}
+
+// WebURL 是这首歌在网页上的地址; 该平台没有公开页面时返回空串。
+//
+// 卡片上的 scheme 要用它 —— 短码是给我们自己认的, 用户点开得跳到歌曲页。
+func (s Song) WebURL() string {
+	for _, info := range infos {
+		if info.Platform == s.Platform && info.WebURL != "" {
+			return strings.Replace(info.WebURL, "%s", s.ID, 1)
+		}
+	}
+	return ""
 }
 
 func ParseRef(ref string) (Song, bool) {

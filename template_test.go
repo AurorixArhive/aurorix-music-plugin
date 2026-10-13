@@ -66,3 +66,31 @@ func TestFailAndHelpTemplatesRender(t *testing.T) {
 		t.Errorf("help 模板应含可点击链接: %q", help)
 	}
 }
+
+// 点歌时先发的那张卡片: 封面 + 标题 + 作者, 点开跳歌曲页。
+// 模板里的参数名与 play.sendCard 传的必须是同一套, 这里照着实际传的值钉死。
+func TestSongCardTemplateRenders(t *testing.T) {
+	if err := templates.RegisterFS("music-test", templateFS, "templates/markdown"); err != nil {
+		t.Fatal(err)
+	}
+
+	rendered, err := templates.FillFor("music-test", "songcard", templates.Args{
+		"cover":  "https://y.gtimg.cn/cover.jpg",
+		"link":   "https://y.qq.com/n/ryqq/songDetail/abc",
+		"title":  "江湖少年",
+		"artist": "封茗囧菌,双笙",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("歌曲卡片:\n%s", rendered)
+
+	want := "<mqqapi://markdown/template?id=2" +
+		"&leftImageUrl=https://y.gtimg.cn/cover.jpg" +
+		"&scheme=https://y.qq.com/n/ryqq/songDetail/abc" +
+		"&text1=江湖少年" +
+		"&text2=封茗囧菌,双笙>"
+	if got := strings.TrimSpace(rendered); got != want {
+		t.Fatalf("歌曲卡片不对:\n实得 %s\n期望 %s", got, want)
+	}
+}
