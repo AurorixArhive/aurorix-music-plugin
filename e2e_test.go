@@ -6,6 +6,7 @@ import (
 	"time"
 
 	_ "github.com/AurorixArhive/aurorix-music-plugin/internal/channel/all"
+	"github.com/AurorixArhive/aurorix-music-plugin/internal/quality"
 	"github.com/AurorixArhive/aurorix-music-plugin/internal/schedule"
 	"github.com/AurorixArhive/aurorix-music-plugin/internal/song"
 )
@@ -82,4 +83,27 @@ func TestProbeAllChannels(t *testing.T) {
 		t.Logf("%-22s %-6s %-4s 成功 %d 失败 %d 延迟 %dms %s",
 			status.ID, status.Platform, verdict, status.OK, status.Fail, status.LatencyMS, status.LastErr)
 	}
+}
+
+// 只给加密的付费曲: 上游在高档位会回退成酷我的 .mflac(谁都打不开), 必须靠降档拿到明文。
+// 这首歌在腾讯那边只有 128k, 所以高档位全部回退 —— 真踩过。
+func TestPaidSongFallsBackToPlayable(t *testing.T) {
+	if testing.Short() {
+		t.Skip("联网测试")
+	}
+
+	scheduler := schedule.New()
+	scheduler.SetPlatformOrder(song.All())
+
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+
+	got, err := scheduler.Resolve(ctx, song.Song{Platform: song.QQ, ID: "0044t2fe2OMKMr"}, "")
+	if err != nil {
+		t.Fatalf("换直链失败: %v", err)
+	}
+	if got.Grade < quality.Usable {
+		t.Fatalf("拿到的是%s, 用户打不开: %s", got.Grade, got.Audio)
+	}
+	t.Logf("%s 时长 %d 秒 [%s] %s", got.Label(), got.Duration, got.Channel, got.Audio)
 }

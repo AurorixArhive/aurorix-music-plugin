@@ -1,6 +1,10 @@
 package song
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/AurorixArhive/aurorix-music-plugin/internal/quality"
+)
 
 type Platform string
 
@@ -89,7 +93,12 @@ type Song struct {
 	Audio    string
 	Cover    string
 	Channel  string
+	// Grade 是这条直链的可用程度(见 internal/quality): 调度按它挑渠道, 发送按它定投递方式。
+	Grade quality.Grade
 }
+
+// Usability 让调度不必认识 song 的字段: 它只问"这份结果有多可用"。
+func (s Song) Usability() int { return int(s.Grade) }
 
 func (s Song) Label() string {
 	if s.Artist == "" {

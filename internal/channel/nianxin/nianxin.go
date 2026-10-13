@@ -18,6 +18,9 @@ const (
 	nianxinCN = "念心"
 )
 
+// nianxinLevels 从高到低试, 见 channel.Ladder。
+var nianxinLevels = []string{"hires", "lossless", "exhigh", "standard"}
+
 var nianxinAPI = "http://mcp.nianxinxz.com/share/ceshi/tx.php"
 
 func nianxinResolve(ctx context.Context, pick song.Song) (song.Song, error) {
@@ -28,29 +31,14 @@ func nianxinResolve(ctx context.Context, pick song.Song) (song.Song, error) {
 	if mid == "" {
 		return song.Song{}, fmt.Errorf("QQ 音乐缺少 songmid")
 	}
-	query := url.Values{"id": {mid}, "level": {"exhigh"}, "type": {"mp3"}}
-	link, err := netx.FinalURL(nianxinAPI+"?"+query.Encode(), nil)
-	if err != nil {
-		return song.Song{}, err
-	}
-	return finish(pick, link)
-}
-
-// finish 探一次直链: 确认能播, 顺手把时长补上。
-func finish(pick song.Song, link string) (song.Song, error) {
-	audio, err := netx.Inspect(link)
-	if err != nil {
-		return song.Song{}, fmt.Errorf("念心直链探测失败: %w", err)
-	}
-	if !audio.Playable {
-		return song.Song{}, fmt.Errorf("念心直链不可播: %s", link)
-	}
-	pick.Audio = link
-	if audio.Seconds > 0 {
-		pick.Duration = audio.Seconds
-	}
-	pick.Channel = nianxinID
-	return pick, nil
+	return channel.Ladder(nianxinLevels, func(level string) (song.Song, error) {
+		query := url.Values{"id": {mid}, "level": {level}, "type": {"mp3"}}
+		link, err := netx.FinalURL(nianxinAPI+"?"+query.Encode(), nil)
+		if err != nil {
+			return song.Song{}, err
+		}
+		return channel.Finish(nianxinID, nianxinCN, pick, link)
+	})
 }
 
 func init() {

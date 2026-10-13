@@ -113,7 +113,7 @@ func kugouResolve(ctx context.Context, pick song.Song) (song.Song, error) {
 	last := error(nil)
 	if link, err := haitangwKG(hash); err != nil {
 		last = err
-	} else if got, err := finish(pick, link); err != nil {
+	} else if got, err := channel.Finish("kg.molan", "墨澜", pick, link); err != nil {
 		last = err
 	} else {
 		return got, nil
@@ -138,7 +138,7 @@ func kugouResolve(ctx context.Context, pick song.Song) (song.Song, error) {
 	if link == "" {
 		return song.Song{}, fmt.Errorf("酷狗没给直链: hash=%s errcode=%d; 海棠湾那边: %v", hash, body.ErrCode, last)
 	}
-	return finish(pick, link)
+	return channel.Finish("kg.molan", "墨澜", pick, link)
 }
 
 var haitangwResolveAPI = "https://musicserver.haitangw.cc/v1/music/resolve-url"
@@ -162,29 +162,6 @@ func haitangwKG(hash string) (string, error) {
 	return body.Data.URL, nil
 }
 
-// finish 探一次直链: 确认能播, 顺手把时长补上。
-func finish(pick song.Song, link string) (song.Song, error) {
-	audio, err := netx.Inspect(link)
-	if err != nil {
-		return song.Song{}, fmt.Errorf("酷狗直链探测失败: %w", err)
-	}
-	if !audio.Playable {
-		return song.Song{}, fmt.Errorf("酷狗直链不可播: %s", link)
-	}
-	pick.Audio = link
-	if audio.Seconds > 0 {
-		pick.Duration = audio.Seconds
-	}
-	pick.Channel = "kg.molan"
-	return pick, nil
-}
-
-// plain 去掉搜索结果里的 HTML 实体, 它们是上游给高亮用的。
-func plain(text string) string {
-	replacer := strings.NewReplacer("&nbsp;", " ", "&amp;", "&", "&lt;", "<", "&gt;", ">", "&quot;", `"`, "&#39;", "'")
-	return strings.TrimSpace(replacer.Replace(text))
-}
-
 func init() {
 	channel.Register(channel.Channel{
 		ID:       "kg.molan",
@@ -193,4 +170,10 @@ func init() {
 		Search:   kugouSearch,
 		Resolve:  kugouResolve,
 	})
+}
+
+// plain 去掉搜索结果里的 HTML 实体, 它们是上游给高亮用的。
+func plain(text string) string {
+	replacer := strings.NewReplacer("&nbsp;", " ", "&amp;", "&", "&lt;", "<", "&gt;", ">", "&quot;", `"`, "&#39;", "'")
+	return strings.TrimSpace(replacer.Replace(text))
 }

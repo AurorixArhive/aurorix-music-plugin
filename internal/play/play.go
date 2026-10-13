@@ -17,6 +17,7 @@ import (
 	"github.com/KasumiYuku/Aurorix/lib/plugin"
 	"github.com/KasumiYuku/Aurorix/lib/templates"
 
+	"github.com/AurorixArhive/aurorix-music-plugin/internal/quality"
 	"github.com/AurorixArhive/aurorix-music-plugin/internal/schedule"
 	"github.com/AurorixArhive/aurorix-music-plugin/internal/song"
 )
@@ -109,7 +110,8 @@ func (p *Play) deliver(ctx *botcontext.MessageContext, pick song.Song, channelID
 }
 
 func (p *Play) sendAudio(ctx *botcontext.MessageContext, found song.Song) error {
-	if found.Duration <= voiceSeconds {
+	// 只有正经音频才值得试语音: 降级的(加密格式这类)QQ 根本收不了, 时长读不出来的也别赌。
+	if found.Grade >= quality.Usable && found.Duration > 0 && found.Duration <= voiceSeconds {
 		if err := ctx.Voice(found.Audio).Send(); err == nil {
 			return nil
 		}

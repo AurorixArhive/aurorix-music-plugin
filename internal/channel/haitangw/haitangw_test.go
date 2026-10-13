@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/AurorixArhive/aurorix-music-plugin/internal/quality"
 	"github.com/AurorixArhive/aurorix-music-plugin/internal/song"
 )
 
@@ -38,7 +39,10 @@ func TestResolveAgainstStubAPI(t *testing.T) {
 	if got.Audio != audioURL || got.Duration != 10 || got.Channel != haitangwID {
 		t.Errorf("直链/时长/渠道不对: %+v", got)
 	}
-	if seen["source"] != "tx" || seen["rid"] != "0039MnYb0qxYhV" || seen["level"] != haitangwLevel {
+	if got.Grade != quality.Usable {
+		t.Errorf("普通 mp3 该是能播: %+v", got)
+	}
+	if seen["source"] != "tx" || seen["rid"] != "0039MnYb0qxYhV" || seen["level"] != haitangwLevels[0] {
 		t.Errorf("请求体不对: %v", seen)
 	}
 }
@@ -78,4 +82,37 @@ func serveStubMP3(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Range", "bytes 0-65535/166800")
 	w.WriteHeader(http.StatusPartialContent)
 	_, _ = w.Write(full[:65536])
+}
+
+// 用户实际踩到的那条: 上游回的是酷我的 .mflac(加密)。以前这里直接判死, 用户什么都拿不到;
+// 现在原样发出去, 只把加密标记带上, 让调度知道它是次优结果。
+func TestResolveKeepsEncryptedLink(t *testing.T) {
+	var audioURL string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/audio.mflac" {
+			w.Header().Set("Content-Type", "application/octet-stream")
+			w.Header().Set("Content-Range", "bytes 0-65535/18180574")
+			w.WriteHeader(http.StatusPartialContent)
+			_, _ = w.Write([]byte("R.\x0d+v465N$3{Dyq.l"))
+			return
+		}
+		_, _ = w.Write([]byte(`{"code":0,"message":"ok","data":{"url":"` + audioURL + `"}}`))
+	}))
+	defer server.Close()
+	audioURL = server.URL + "/audio.mflac"
+
+	oldAPI := haitangwAPI
+	haitangwAPI = server.URL
+	defer func() { haitangwAPI = oldAPI }()
+
+	got, err := haitangwResolve(context.Background(), song.Song{Platform: song.QQ, ID: "0039MnYb0qxYhV"})
+	if err != nil {
+		t.Fatalf("加密文件不该判死: %v", err)
+	}
+	if got.Grade != quality.Degraded {
+		t.Errorf("加密文件该是降级而不是判死: %+v", got)
+	}
+	if got.Audio != audioURL {
+		t.Errorf("直链 = %q, 期望 %q", got.Audio, audioURL)
+	}
 }

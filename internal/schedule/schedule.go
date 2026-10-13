@@ -9,6 +9,7 @@ import (
 
 	"github.com/AurorixArhive/aurorix-music-plugin/internal/channel"
 	"github.com/AurorixArhive/aurorix-music-plugin/internal/guard"
+	"github.com/AurorixArhive/aurorix-music-plugin/internal/quality"
 	"github.com/AurorixArhive/aurorix-music-plugin/internal/song"
 )
 
@@ -285,20 +286,37 @@ func race[T any](ctx context.Context, list []channel.Channel, hedge time.Duratio
 	launch()
 
 	var lastErr error
+	// best 收着"发得出去、但不够好"的结果(加密格式这类)。它不打断这一轮 ——
+	// 先把别的渠道问完, 有够好的就用够好的, 实在没有才回落到这里最像样的那一份。
+	var best T
+	hasBest := false
+	bestScore := 0
 	for {
 		select {
 		case got := <-results:
 			done++
 			if got.err == nil {
-				return got.value, nil
+				score, ranked := usability(got.value)
+				// 没有分级概念的结果(搜索返回的列表)一律当作已经够好, 够好的立刻收工。
+				if !ranked || score >= int(quality.Usable) {
+					return got.value, nil
+				}
+				// 低于"降级"的等于没有结果 —— 别把一份不可用的东西当兜底发出去。
+				if score >= int(quality.Degraded) && (!hasBest || score > bestScore) {
+					best, hasBest, bestScore = got.value, true, score
+				}
+			} else {
+				lastErr = got.err
 			}
-			lastErr = got.err
 			if launched < len(list) {
 				launch()
 				timer.Reset(hedge)
 				continue
 			}
 			if done == launched {
+				if hasBest {
+					return best, nil
+				}
 				return zero, lastErr
 			}
 		case <-timer.C:
@@ -307,10 +325,24 @@ func race[T any](ctx context.Context, list []channel.Channel, hedge time.Duratio
 				timer.Reset(hedge)
 			}
 		case <-ctx.Done():
+			if hasBest {
+				return best, nil
+			}
 			if lastErr != nil {
 				return zero, lastErr
 			}
 			return zero, ctx.Err()
 		}
 	}
+}
+
+// rankable 让结果自己声明"这份东西有多可用", 调度因此不必认识 song 的字段。
+type rankable interface{ Usability() int }
+
+// usability 取结果的可用等级; 没有分级的返回 ok=false, 视为已经够好。
+func usability[T any](value T) (int, bool) {
+	if r, ok := any(value).(rankable); ok {
+		return r.Usability(), true
+	}
+	return 0, false
 }

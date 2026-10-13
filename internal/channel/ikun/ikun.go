@@ -124,27 +124,11 @@ func wyResolve(ctx context.Context, pick song.Song) (song.Song, error) {
 			last = fmt.Errorf("%s 没给出直链: %s", Label, strings.TrimSpace(body.Message))
 			continue
 		}
-		got, err := finish(pick, body.URL)
+		got, err := channel.Finish("wyy.ikun", Label, pick, body.URL)
 		if err == nil {
 			return got, nil
 		}
 		last = err
 	}
 	return song.Song{}, last
-}
-
-// finish 探一次直链: 确认能播, 顺手把时长补上。
-func finish(pick song.Song, link string) (song.Song, error) {
-	audio, err := netx.Inspect(link)
-	if err != nil {
-		return song.Song{}, fmt.Errorf("%s 探测直链失败: %w", Label, err)
-	}
-	if !audio.Playable {
-		return song.Song{}, fmt.Errorf("%s 拿回来的不是音频: %s", Label, link)
-	}
-	pick.Audio = link
-	if audio.Seconds > 0 {
-		pick.Duration = audio.Seconds
-	}
-	return pick, nil
 }

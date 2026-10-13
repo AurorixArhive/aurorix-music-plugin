@@ -13,10 +13,12 @@ import (
 )
 
 const (
-	haitangwID    = "qq.haitangw"
-	haitangwCN    = "海棠湾"
-	haitangwLevel = "exhigh"
+	haitangwID = "qq.haitangw"
+	haitangwCN = "海棠湾"
 )
+
+// haitangwLevels 从高到低试; 拿不到高音质时上游会回退成加密文件, 能不能用由探测决定。
+var haitangwLevels = []string{"hires", "lossless", "exhigh", "standard"}
 
 var (
 	haitangwAPI    = "https://musicserver.haitangw.cc/v1/music/resolve-url"
@@ -39,33 +41,18 @@ func haitangwResolve(ctx context.Context, pick song.Song) (song.Song, error) {
 	if mid == "" {
 		return song.Song{}, fmt.Errorf("QQ 音乐缺少 songmid")
 	}
-	payload := map[string]any{"source": "tx", "rid": mid, "level": haitangwLevel}
-	var body haitangwBody
-	if err := haitangwClient.PostJSONDecode(haitangwAPI, payload, &body, nil); err != nil {
-		return song.Song{}, err
-	}
-	link := strings.TrimSpace(body.Data.URL)
-	if link == "" {
-		return song.Song{}, fmt.Errorf("海棠湾没给直链: %s", body.Message)
-	}
-	return finish(pick, link)
-}
-
-// finish 探一次直链: 确认能播, 顺手把时长补上。
-func finish(pick song.Song, link string) (song.Song, error) {
-	audio, err := netx.Inspect(link)
-	if err != nil {
-		return song.Song{}, fmt.Errorf("海棠湾直链探测失败: %w", err)
-	}
-	if !audio.Playable {
-		return song.Song{}, fmt.Errorf("海棠湾直链不可播: %s", link)
-	}
-	pick.Audio = link
-	if audio.Seconds > 0 {
-		pick.Duration = audio.Seconds
-	}
-	pick.Channel = haitangwID
-	return pick, nil
+	return channel.Ladder(haitangwLevels, func(level string) (song.Song, error) {
+		payload := map[string]any{"source": "tx", "rid": mid, "level": level}
+		var body haitangwBody
+		if err := haitangwClient.PostJSONDecode(haitangwAPI, payload, &body, nil); err != nil {
+			return song.Song{}, err
+		}
+		link := strings.TrimSpace(body.Data.URL)
+		if link == "" {
+			return song.Song{}, fmt.Errorf("海棠湾没给直链: %s", body.Message)
+		}
+		return channel.Finish(haitangwID, haitangwCN, pick, link)
+	})
 }
 
 func init() {

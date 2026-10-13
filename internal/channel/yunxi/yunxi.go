@@ -61,7 +61,7 @@ func yunxiResolve(ctx context.Context, pick song.Song) (song.Song, error) {
 	if !sameSong(title, pick.Artist, body.Data.Song, body.Data.Singer) {
 		return song.Song{}, fmt.Errorf("云汐给回来的是 %s - %s, 不是想要的那首", body.Data.Song, body.Data.Singer)
 	}
-	return finish(pick, link)
+	return channel.Finish(yunxiID, yunxiCN, pick, link)
 }
 
 // sameSong 歌名必须一样, 歌手沾上一个就行 —— 上游的歌手串有 "A,B" 也有 "A、B"。
@@ -84,23 +84,6 @@ func firstArtist(artist string) string {
 		return strings.TrimSpace(artist)
 	}
 	return strings.TrimSpace(parts[0])
-}
-
-// finish 探一次直链: 确认能播, 顺手把时长补上。
-func finish(pick song.Song, link string) (song.Song, error) {
-	audio, err := netx.Inspect(link)
-	if err != nil {
-		return song.Song{}, fmt.Errorf("云汐直链探测失败: %w", err)
-	}
-	if !audio.Playable {
-		return song.Song{}, fmt.Errorf("云汐直链不可播: %s", link)
-	}
-	pick.Audio = link
-	if audio.Seconds > 0 {
-		pick.Duration = audio.Seconds
-	}
-	pick.Channel = yunxiID
-	return pick, nil
 }
 
 func init() {
