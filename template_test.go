@@ -28,7 +28,7 @@ func TestSearchTemplateRendersQuotedInlineLinks(t *testing.T) {
 	for _, want := range []string{
 		"# 🎵 花海",
 		"共 2 首 · 点蓝色歌名直接发送",
-		"> [花海](mqqapi://aio/inlinecmd?command=%2F%E7%82%B9%E6%AD%8C+QAAMywUJgQ0q229",
+		"> <qqbot-cmd-input text=\"%2F%E7%82%B9%E6%AD%8C%20QAAMywUJgQ0q229\" show=\"%E8%8A%B1%E6%B5%B7\" />",
 		" · 周杰伦",
 		" · 中孝介",
 	} {
@@ -62,8 +62,8 @@ func TestFailAndHelpTemplatesRender(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(help, "mqqapi://aio/inlinecmd?command=") {
-		t.Errorf("help 模板应含可点击链接: %q", help)
+	if !strings.Contains(help, "<qqbot-cmd-input") {
+		t.Errorf("help 模板应含可点击的指令标签: %q", help)
 	}
 }
 
@@ -86,10 +86,10 @@ func TestSongCardTemplateRenders(t *testing.T) {
 	t.Logf("歌曲卡片:\n%s", rendered)
 
 	want := "<mqqapi://markdown/template?id=2" +
-		"&leftImageUrl=https://y.gtimg.cn/cover.jpg" +
-		"&scheme=https://y.qq.com/n/ryqq/songDetail/abc" +
-		"&text1=江湖少年" +
-		"&text2=封茗囧菌,双笙>"
+		"&leftImageUrl=https%3A%2F%2Fy.gtimg.cn%2Fcover.jpg" +
+		"&scheme=https%3A%2F%2Fy.qq.com%2Fn%2Fryqq%2FsongDetail%2Fabc" +
+		"&text1=%E6%B1%9F%E6%B9%96%E5%B0%91%E5%B9%B4" +
+		"&text2=%E5%B0%81%E8%8C%97%E5%9B%A7%E8%8F%8C%2C%E5%8F%8C%E7%AC%99>"
 	if got := strings.TrimSpace(rendered); got != want {
 		t.Fatalf("歌曲卡片不对:\n实得 %s\n期望 %s", got, want)
 	}

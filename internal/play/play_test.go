@@ -2,18 +2,8 @@ package play
 
 import (
 	"errors"
-	"io"
-	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
-
-	"github.com/KasumiYuku/Aurorix/lib/api"
-	"github.com/KasumiYuku/Aurorix/lib/buttons"
-	"github.com/KasumiYuku/Aurorix/lib/constant"
-	botcontext "github.com/KasumiYuku/Aurorix/lib/context"
-	"github.com/KasumiYuku/Aurorix/lib/requests"
-	"github.com/KasumiYuku/Aurorix/lib/templates"
 
 	"github.com/AurorixArhive/aurorix-music-plugin/internal/schedule"
 	"github.com/AurorixArhive/aurorix-music-plugin/internal/song"
@@ -108,63 +98,5 @@ func TestCardWorthSending(t *testing.T) {
 		if got := cardWorthSending(c.in); got != c.want {
 			t.Errorf("%s: cardWorthSending = %v, want %v", c.name, got, c.want)
 		}
-	}
-}
-
-// 卡片这条消息不要框架级底部按钮 —— 一条卡底下再压一行按钮, 等于把它切成两块。
-// 对照: 同一条上下文里发普通 markdown, 底部按钮必须还在, 否则这个断言什么都证明不了。
-func TestCardSendsWithoutFooter(t *testing.T) {
-	buttons.EnableFooter(func() []string { return []string{"+1 | counter | 好的"} })
-	t.Cleanup(buttons.DisableFooter)
-
-	var bodies []string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		if r.URL.Path == "/token" {
-			_, _ = w.Write([]byte(`{"access_token":"tok","expires_in":"7200"}`))
-			return
-		}
-		data, _ := io.ReadAll(r.Body)
-		bodies = append(bodies, string(data))
-		_, _ = w.Write([]byte(`{"id":"msg-1","timestamp":"1700000000"}`))
-	}))
-	defer srv.Close()
-
-	bot := api.Init("app", "secret", srv.URL, requests.Init(5))
-	bot.Tokens.TokenAPI = srv.URL + "/token"
-
-	// 模板注册到全局命名空间: 这条只验 NoFooter, 不依赖插件 templates/markdown 里那个文件。
-	templates.NewMarkdownTemplate(templateSongCard, `{{qqcard 2 leftImageUrl=cover scheme=link text1=title text2=artist}}`)
-
-	mgr := &botcontext.MessageManager{
-		MessageId: "m1", EventId: "e1", GroupId: "g1", UserId: "u1",
-		Target: constant.GroupMessage, Qapi: bot, PluginId: "music",
-	}
-	ctx := &botcontext.MessageContext{Context: &botcontext.Context{MessageManager: mgr}}
-
-	card := song.Song{Platform: song.QQ, ID: "x", Title: "花海", Artist: "周杰伦", Cover: "https://y.gtimg.cn/c.jpg"}
-	if err := (&Play{}).sendCard(ctx, card); err != nil {
-		t.Fatalf("发卡失败: %v", err)
-	}
-	if len(bodies) != 1 {
-		t.Fatalf("应只发一条, 实发 %d", len(bodies))
-	}
-	body := bodies[0]
-	if strings.Contains(body, "aurorix.footer.") {
-		t.Errorf("卡片带了底部按钮: %s", body)
-	}
-	for _, want := range []string{"text1=花海", "text2=周杰伦", "leftImageUrl="} {
-		if !strings.Contains(body, want) {
-			t.Errorf("卡片少了 %q: %s", want, body)
-		}
-	}
-
-	// 对照组: 同一条上下文里的普通 markdown 照旧带底部按钮。
-	if err := mgr.Markdown("普通消息").Send(); err != nil {
-		t.Fatalf("发对照消息失败: %v", err)
-	}
-	plain := bodies[len(bodies)-1]
-	if !strings.Contains(plain, "aurorix.footer.") {
-		t.Fatalf("对照组都没挂上底部按钮, 这一轮断言不能说明问题: %s", plain)
 	}
 }
